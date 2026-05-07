@@ -107,14 +107,21 @@
 	/>
 </svelte:head>
 
-<div
-	class="prize-banner"
-	role="status"
-	aria-label="Prize announcement"
-	title="Achieve a score of 1,000 or higher to win"
->
-	<span class="prize-amount">US$10,000</span>
-	<span class="prize-text">prize for a score of 100 or higher!</span>
+<div class="prize-stack" role="status" aria-label="Prize announcements">
+	<div
+		class="prize-banner gold"
+		title="First player to score 100 or higher wins US$10,000"
+	>
+		<span class="prize-amount">US$10,000</span>
+		<span class="prize-text">prize for the first score of 100 or higher!</span>
+	</div>
+	<div
+		class="prize-banner silver"
+		title="First player to score 50 or higher wins US$1,000"
+	>
+		<span class="prize-amount">US$1,000</span>
+		<span class="prize-text">prize for the first score of 50 or higher!</span>
+	</div>
 </div>
 
 <div class="page">
@@ -266,6 +273,29 @@
 		>
 			JD Brinton Consulting
 		</a>
+		<span class="footer-sep" aria-hidden="true">·</span>
+		<a
+			class="footer-source"
+			href="https://github.com/jdbconsulting/ai-sudoku"
+			target="_blank"
+			rel="noopener noreferrer"
+			title="View source on GitHub"
+		>
+			<svg
+				class="footer-source-icon"
+				viewBox="0 0 16 16"
+				width="14"
+				height="14"
+				aria-hidden="true"
+				focusable="false"
+			>
+				<path
+					fill="currentColor"
+					d="M8 0C3.58 0 0 3.58 0 8a8 8 0 0 0 5.47 7.59c.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0 0 16 8c0-4.42-3.58-8-8-8Z"
+				/>
+			</svg>
+			<span>Source on GitHub</span>
+		</a>
 	</footer>
 </div>
 
@@ -281,14 +311,22 @@
 		color: rgb(226 232 240);
 	}
 
-	.prize-banner {
-		/* Fixed so it stays visible while scrolling — purely promotional and
-		   should never be lost below the fold. Rendered outside `.page` so the
-		   page's max-width / centering doesn't pull it off the right edge. */
+	.prize-stack {
+		/* Fixed so the prizes stay visible while scrolling. Rendered outside
+		   `.page` so the page's max-width / centering doesn't pull them off
+		   the right edge on wide viewports. */
 		position: fixed;
 		top: 0.75rem;
 		right: 0.75rem;
 		z-index: 50;
+		display: flex;
+		flex-direction: column;
+		align-items: flex-end;
+		gap: 0.4rem;
+		pointer-events: none;
+		max-width: calc(100vw - 1.5rem);
+	}
+	.prize-banner {
 		display: inline-flex;
 		align-items: baseline;
 		gap: 0.4rem;
@@ -298,11 +336,17 @@
 		font-size: 0.78rem;
 		letter-spacing: 0.04em;
 		color: rgb(15 23 42);
+		box-shadow: 0 6px 18px rgba(0, 0, 0, 0.35), 0 0 0 1px oklch(0.95 0.12 90 / 0.35) inset;
+		max-width: 100%;
+	}
+	.prize-banner.gold {
 		background: linear-gradient(135deg, oklch(0.88 0.18 90), oklch(0.82 0.2 60));
 		border: 1px solid oklch(0.55 0.16 70);
-		box-shadow: 0 6px 18px rgba(0, 0, 0, 0.35), 0 0 0 1px oklch(0.95 0.12 90 / 0.4) inset;
-		pointer-events: none;
-		max-width: calc(100vw - 1.5rem);
+	}
+	.prize-banner.silver {
+		background: linear-gradient(135deg, oklch(0.92 0.02 250), oklch(0.78 0.03 250));
+		border: 1px solid oklch(0.6 0.02 250);
+		box-shadow: 0 6px 18px rgba(0, 0, 0, 0.3), 0 0 0 1px oklch(0.96 0.01 250 / 0.5) inset;
 	}
 	.prize-amount {
 		font-weight: 800;
@@ -699,5 +743,31 @@
 		outline: 2px solid oklch(0.7 0.18 230);
 		outline-offset: 3px;
 		border-radius: 2px;
+	}
+	.footer-sep {
+		color: rgb(71 85 105);
+	}
+	.footer-source {
+		display: inline-flex;
+		align-items: center;
+		gap: 0.3rem;
+		color: rgb(148 163 184);
+		text-decoration: none;
+		transition: color 120ms ease;
+	}
+	.footer-source:hover {
+		color: rgb(226 232 240);
+		text-decoration: underline;
+		text-underline-offset: 3px;
+	}
+	.footer-source:focus-visible {
+		outline: 2px solid oklch(0.7 0.18 230);
+		outline-offset: 3px;
+		border-radius: 2px;
+	}
+	.footer-source-icon {
+		flex-shrink: 0;
+		position: relative;
+		top: 1.5px;
 	}
 </style>

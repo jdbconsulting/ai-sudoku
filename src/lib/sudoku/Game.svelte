@@ -4,6 +4,7 @@
 	import Board3D from './Board3D.svelte';
 	import ResidualGrid from './ResidualGrid.svelte';
 	import SolutionDialog from './SolutionDialog.svelte';
+	import SubmitScoreDialog from './SubmitScoreDialog.svelte';
 	import type { GameState } from './state.svelte';
 
 	type Props = { game: GameState };
@@ -11,6 +12,7 @@
 
 	let dialogOpen = $state(false);
 	let dialogMode = $state<'export' | 'import'>('export');
+	let submitDialogOpen = $state(false);
 
 	function openDialog(mode: 'export' | 'import') {
 		dialogMode = mode;
@@ -96,18 +98,35 @@
 	<div class="row toolbar">
 		<button type="button" onclick={() => loadPreset('clear')}>Clear all</button>
 		<button type="button" onclick={() => loadPreset('random')}>Randomize</button>
-		<button type="button" onclick={() => loadPreset('standard')}
-			title="Schoolbook m·n·p multiplications (ω = 3)">
+		<button
+			type="button"
+			onclick={() => loadPreset('standard')}
+			title="Schoolbook m·n·p multiplications (ω = 3)"
+		>
 			Load Naive (R = m·n·p)
 		</button>
 		<span class="toolbar-sep" aria-hidden="true"></span>
-		<button type="button" onclick={() => openDialog('export')}
-			title="Save the current boards as JSON">
+		<button
+			type="button"
+			onclick={() => openDialog('export')}
+			title="Save the current boards as JSON"
+		>
 			Save game…
 		</button>
-		<button type="button" onclick={() => openDialog('import')}
-			title="Load boards from a JSON game file">
+		<button
+			type="button"
+			onclick={() => openDialog('import')}
+			title="Load boards from a JSON game file"
+		>
 			Load game…
+		</button>
+		<button
+			type="button"
+			class="primary submit"
+			onclick={() => (submitDialogOpen = true)}
+			title="Send these boards to the High Score Board (server recomputes the score)"
+		>
+			Submit score…
 		</button>
 		<span class="toolbar-hint">
 			Want a head start? Open the
@@ -117,17 +136,12 @@
 </section>
 
 <SolutionDialog {game} bind:open={dialogOpen} mode={dialogMode} />
+<SubmitScoreDialog {game} bind:open={submitDialogOpen} />
 
 <div class="view-controls">
 	<label class="spacing-ctrl">
 		<span>Page spacing</span>
-		<input
-			type="range"
-			min="0.04"
-			max="1.4"
-			step="0.01"
-			bind:value={game.tightGap}
-		/>
+		<input type="range" min="0.04" max="1.4" step="0.01" bind:value={game.tightGap} />
 		<output>{game.tightGap.toFixed(2)}</output>
 	</label>
 	<label class="spacing-ctrl">
@@ -312,6 +326,11 @@
 		color: rgb(15 23 42);
 		font-weight: 600;
 		border-color: transparent;
+	}
+	button.submit {
+		/* Different palette than "Apply size" so the two primary buttons in
+		   the same card don't compete; green hints at "publish / commit". */
+		background: linear-gradient(135deg, oklch(0.78 0.18 145), oklch(0.62 0.16 175));
 	}
 
 	.scoreboard {

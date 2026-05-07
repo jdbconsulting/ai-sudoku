@@ -1,0 +1,128 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: >-
+  AI-Sudoku high-score backend.
+
+  One Lambda Function URL routes both:
+    - POST /scores         submit a board, server recomputes the score
+    - GET  /scores/top     top 100 leaderboard
+
+  All scoring math runs server-side: the client's claimed score is never
+  read. The Lambda imports the same tensor.ts the frontend uses (bundled
+  by esbuild) so player and server agree byte-for-byte.
+
+Parameters:
+  StageName:
+    Type: String
+    Default: prod
+    Description: Used to namespace the DynamoDB table and Lambda function name.
+  AllowOrigin:
+    Type: String
+    Default: '*'
+    Description: >-
+      CORS Access-Control-Allow-Origin value. "*" is fine: the API is
+      intentionally public, has no auth, and CORS isn't a security
+      boundary here (curl works regardless). Restrict only if you want
+      to discourage casual browser embedding.
+
+Globals:
+  Function:
+    Runtime: nodejs22.x
+    Architectures: [arm64]
+    MemorySize: 256
+    Timeout: 5
+
+Resources:
+  ScoresTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub 'ai-sudoku-scores-${StageName}'
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: pk
+          AttributeType: S
+        - AttributeName: sk
+          AttributeType: S
+        - AttributeName: gsi1pk
+          AttributeType: S
+        - AttributeName: gsi1sk
+          AttributeType: N
+      KeySchema:
+        - AttributeName: pk
+          KeyType: HASH
+        - AttributeName: sk
+          KeyType: RANGE
+      GlobalSecondaryIndexes:
+        # Single-partition leaderboard. At our traffic this is fine; if it
+        # ever gets hot, shard by `gsi1pk = "global#<bucket>"` and merge in
+        # the handler. We Query with ScanIndexForward=false to get top→bottom
+        # by score in one call.
+        - IndexName: byScore
+          KeySchema:
+            - AttributeName: gsi1pk
+              KeyType: HASH
+            - AttributeName: gsi1sk
+              KeyType: RANGE
+          Projection:
+            # Whole item — top-N reads are far rarer than writes and we
+            # need every metadata field to render the table row.
+            ProjectionType: ALL
+
+  ApiFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        # CommonJS, not ESM. ESM tripped on bundled CJS deps that call
+        # `require("crypto")` (e.g. @smithy/uuid via @aws-sdk/lib-dynamodb)
+        # — ESM has no `require`, so the runtime crashes at module load.
+        # CJS is what AWS optimizes for and gives us a smaller cold start.
+        Target: es2022
+        Sourcemap: true
+        Minify: true
+        EntryPoints:
+          - handler.ts
+        # The AWS SDK v3 *clients* ship with the Node 22 runtime, but
+        # `lib-dynamodb` (the marshall/unmarshall helper layer) does not,
+        # so we bundle that and only mark the runtime-provided clients as
+        # external.
+        External:
+          - '@aws-sdk/client-dynamodb'
+    Properties:
+      FunctionName: !Sub 'ai-sudoku-api-${StageName}'
+      CodeUri: api/
+      Handler: handler.handler
+      Environment:
+        Variables:
+          TABLE_NAME: !Ref ScoresTable
+          ALLOW_ORIGIN: !Ref AllowOrigin
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref ScoresTable
+      FunctionUrlConfig:
+        AuthType: NONE
+        Cors:
+          AllowOrigins:
+            - !Ref AllowOrigin
+          # Lambda Function URLs auto-handle the OPTIONS preflight; the
+          # AllowMethods list itself only accepts the "real" verbs
+          # (GET|PUT|HEAD|POST|PATCH|DELETE|*). Listing OPTIONS here
+          # trips CloudFormation's EarlyValidation hook with an opaque
+          # error.
+          AllowMethods:
+            - GET
+            - POST
+          AllowHeaders:
+            - content-type
+          MaxAge: 86400
+
+Outputs:
+  ApiUrl:
+    Description: >-
+      Lambda Function URL. Set this as PUBLIC_API_URL in the GitHub Actions
+      build environment so the frontend knows where to POST scores and GET
+      the leaderboard.
+    Value: !GetAtt ApiFunctionUrl.FunctionUrl
+  TableName:
+    Description: DynamoDB table backing the leaderboard.
+    Value: !Ref ScoresTable

@@ -35,6 +35,12 @@ jobs:
         run: npm run build
         env:
           NODE_ENV: production
+          # Lambda Function URL for the leaderboard backend. Set in
+          # repo-level "Variables" (Settings → Secrets and variables →
+          # Actions → Variables) so it can be inlined into the static
+          # bundle at build time. If unset, the leaderboard renders
+          # the Famous Algorithms table only (graceful degradation).
+          PUBLIC_API_URL: ${{ vars.PUBLIC_API_URL }}
 
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v3

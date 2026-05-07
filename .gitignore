@@ -22,3 +22,8 @@ Thumbs.db
 # Vite
 vite.config.js.timestamp-*
 vite.config.ts.timestamp-*
+
+# SAM (infra/)
+.aws-sam/
+samconfig.toml
+infra/api/dist/
