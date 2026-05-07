@@ -469,5 +469,14 @@
 		.residual-section {
 			padding: 0.6rem;
 		}
+		/* On phones the single-column rule above used `1fr` (not
+		   `minmax(0, 1fr)`), so an intrinsically wider child — like the
+		   canvas at its 300×150 default size before `resize()` runs —
+		   could force the track to grow past the viewport. Pin the
+		   minimum to 0 so the track shrinks to whatever the available
+		   width allows, matching the desktop rule. */
+		.boards-row {
+			grid-template-columns: minmax(0, 1fr);
+		}
 	}
 </style>

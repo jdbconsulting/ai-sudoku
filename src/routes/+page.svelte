@@ -421,10 +421,13 @@
 		}
 		/* Tighten page gutters on phones so 240–280px-wide boards don't
 		   need horizontal scrolling. The clamp() on desktop padding keeps
-		   the wider rule untouched. */
+		   the wider rule untouched. `overflow-x: clip` is a final
+		   safeguard so any stray child overflow (e.g. a momentarily
+		   oversized canvas) never produces a horizontal scrollbar. */
 		.page {
 			padding: 0.6rem 0.6rem 3rem;
 			gap: 1rem;
+			overflow-x: clip;
 		}
 	}
 

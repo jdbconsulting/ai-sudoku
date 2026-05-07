@@ -883,6 +883,19 @@
 		   rule still keeps the canvas square at whatever width fits. */
 		.canvas-container {
 			min-width: 0;
+			/* Belt-and-suspenders: clip anything inside that briefly
+			   exceeds the container before THREE's resize handler runs
+			   so the boards card never gets pushed off-screen. */
+			overflow: hidden;
+		}
+		/* The canvas element starts at the HTML5 default 300×150 before
+		   our onMount resize() runs. On a narrow viewport that default
+		   would temporarily exceed its parent and inflate the grid
+		   track. Cap it at 100% width so the canvas stays inside its
+		   container even during that one-frame initial flash. */
+		canvas {
+			max-width: 100%;
+			height: auto;
 		}
 	}
 </style>
