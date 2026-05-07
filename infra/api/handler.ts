@@ -24,7 +24,6 @@ import {
 import { parseSubmission, ValidationError } from './sanitize';
 
 const TABLE_NAME = requireEnv('TABLE_NAME');
-const ALLOW_ORIGIN = process.env.ALLOW_ORIGIN ?? '*';
 
 const ddb = DynamoDBDocumentClient.from(new DynamoDBClient({}), {
 	marshallOptions: {
@@ -43,25 +42,25 @@ export const handler = async (
 	const method = event.requestContext.http.method;
 	const path = event.rawPath;
 
+	// CORS is handled entirely by the Lambda Function URL configuration
+	// (see template.yaml). Setting headers here too would produce
+	// duplicate Access-Control-Allow-Origin values and the browser
+	// rejects the response. Likewise the Function URL handles OPTIONS
+	// preflights itself — they never reach this handler.
 	try {
-		// Function URL CORS preflights are handled by the Function URL
-		// itself, but a defensive 204 here makes local testing with `sam
-		// local start-lambda` behave the same way.
-		if (method === 'OPTIONS') return cors({ statusCode: 204 });
+		if (method === 'GET' && path === '/scores/top') return await getTopScores();
+		if (method === 'POST' && path === '/scores') return await submitScore(event);
 
-		if (method === 'GET' && path === '/scores/top') return cors(await getTopScores());
-		if (method === 'POST' && path === '/scores') return cors(await submitScore(event));
-
-		return cors(json(404, { error: `not found: ${method} ${path}` }));
+		return json(404, { error: `not found: ${method} ${path}` });
 	} catch (err) {
 		if (err instanceof ValidationError) {
-			return cors(json(err.statusCode, { error: err.message }));
+			return json(err.statusCode, { error: err.message });
 		}
 		// Don't leak internals. Log the full error (CloudWatch picks it
 		// up via the runtime's stderr capture) and respond with a generic
 		// 500 — the structured log entry is what gets debugged.
 		console.error('unhandled error', err);
-		return cors(json(500, { error: 'internal server error' }));
+		return json(500, { error: 'internal server error' });
 	}
 };
 
@@ -212,19 +211,6 @@ function json(statusCode: number, body: unknown): APIGatewayProxyStructuredResul
 		statusCode,
 		headers: { 'content-type': 'application/json; charset=utf-8' },
 		body: JSON.stringify(body)
-	};
-}
-
-function cors(resp: APIGatewayProxyStructuredResultV2): APIGatewayProxyStructuredResultV2 {
-	return {
-		...resp,
-		headers: {
-			...(resp.headers ?? {}),
-			'access-control-allow-origin': ALLOW_ORIGIN,
-			'access-control-allow-methods': 'GET,POST,OPTIONS',
-			'access-control-allow-headers': 'content-type',
-			'access-control-max-age': '86400'
-		}
 	};
 }
 

@@ -95,7 +95,6 @@ Resources:
       Environment:
         Variables:
           TABLE_NAME: !Ref ScoresTable
-          ALLOW_ORIGIN: !Ref AllowOrigin
       Policies:
         - DynamoDBCrudPolicy:
             TableName: !Ref ScoresTable
