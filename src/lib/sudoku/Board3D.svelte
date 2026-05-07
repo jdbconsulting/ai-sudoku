@@ -93,6 +93,10 @@
 		// depthWrite=true so the active page's cells z-occlude the cells of
 		// any inactive pages behind it. updateActiveStyles() flips inactive
 		// pages to transparent/dim each frame the active changes.
+		// DoubleSide on every cell means both front and back render with the
+		// same texture (glyphs appear mirrored from behind, which is the
+		// natural geometry) and the raycaster intersects either face — so
+		// clicks land on cells regardless of which side faces the camera.
 		if (value === 1) {
 			return new THREE.MeshBasicMaterial({
 				color: 0xffffff,
@@ -100,6 +104,7 @@
 				transparent: false,
 				opacity: 1,
 				depthWrite: true,
+				side: THREE.DoubleSide,
 				toneMapped: false
 			});
 		}
@@ -110,6 +115,7 @@
 				transparent: false,
 				opacity: 1,
 				depthWrite: true,
+				side: THREE.DoubleSide,
 				toneMapped: false
 			});
 		}
@@ -118,6 +124,7 @@
 			transparent: false,
 			opacity: 1,
 			depthWrite: true,
+			side: THREE.DoubleSide,
 			toneMapped: false
 		});
 	}
@@ -501,9 +508,11 @@
 	let lastMoveT = 0;
 	const VEL_SMOOTH = 0.35; // 0..1, higher = more responsive
 	const RELEASE_GRACE_MS = 90; // mouse must have moved within this window for momentum
-	const SPIN_HALF_LIFE = 0.9; // seconds — spin loses half its energy this often
 
-	// Active angular momentum (rad/sec). Decays each frame.
+	// Active angular momentum (rad/sec). Frictionless: once a flick imparts
+	// momentum, the stack keeps spinning until the user grabs it again
+	// (onPointerDown zeroes both axes) or, on the X axis, until the
+	// rotation clamp is hit.
 	let angVelX = 0;
 	let angVelY = 0;
 
@@ -633,17 +642,24 @@
 		const dt = Math.min(0.06, (now - lastFrameT) / 1000);
 		lastFrameT = now;
 
-		// Apply angular momentum (if any) and decay it exponentially.
-		if (Math.abs(angVelX) > 0.001 || Math.abs(angVelY) > 0.001) {
+		// Apply angular momentum every frame. There is no friction — the
+		// stack keeps spinning until the user grabs it again. Y rotation
+		// has no clamp (it wraps freely); X rotation is clamped just shy
+		// of ±π/2 to prevent flipping upside down. When X hits the clamp
+		// we zero its velocity so it doesn't waste compute pressing into
+		// the wall every frame; Y velocity is left intact so a diagonal
+		// flick continues spinning purely horizontally afterwards.
+		if (angVelX !== 0 || angVelY !== 0) {
 			userRotX += angVelX * dt;
 			userRotY += angVelY * dt;
-			userRotX = Math.max(-Math.PI / 2.05, Math.min(Math.PI / 2.05, userRotX));
-			const decay = Math.exp((-Math.LN2 / SPIN_HALF_LIFE) * dt);
-			angVelX *= decay;
-			angVelY *= decay;
-			if (Math.abs(angVelX) < 0.001 && Math.abs(angVelY) < 0.001) {
+			const xMin = -Math.PI / 2.05;
+			const xMax = Math.PI / 2.05;
+			if (userRotX <= xMin) {
+				userRotX = xMin;
 				angVelX = 0;
-				angVelY = 0;
+			} else if (userRotX >= xMax) {
+				userRotX = xMax;
+				angVelX = 0;
 			}
 		}
 
