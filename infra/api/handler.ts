@@ -51,6 +51,12 @@ export const handler = async (
 		if (method === 'GET' && path === '/scores/top') return await getTopScores();
 		if (method === 'POST' && path === '/scores') return await submitScore(event);
 
+		// /scores/{id} — fetch full record (including boards) so the
+		// frontend can replay a submission. Only matches a UUID-shaped
+		// segment so a typo can't cause a wide DDB scan.
+		const idMatch = path.match(/^\/scores\/([0-9a-f-]{36})$/i);
+		if (method === 'GET' && idMatch) return await getScoreById(idMatch[1]);
+
 		return json(404, { error: `not found: ${method} ${path}` });
 	} catch (err) {
 		if (err instanceof ValidationError) {
@@ -126,7 +132,15 @@ async function submitScore(
 				omega,
 				score,
 				solved,
-				submittedAt
+				submittedAt,
+				// Stored as Binary (B). Int8Array buffer bytes are bit-
+				// identical to the corresponding Uint8Array view (-1 →
+				// 0xFF, 0 → 0x00, 1 → 0x01), so reinterpreting is a
+				// zero-copy operation. ~1 byte per cell, well under
+				// DDB's 400 KB item limit even for max <8,8,8>.
+				boardA: encodeBoard(A),
+				boardB: encodeBoard(B),
+				boardC: encodeBoard(C)
 			}
 		})
 	);
@@ -169,7 +183,12 @@ async function getTopScores(): Promise<APIGatewayProxyStructuredResultV2> {
 			KeyConditionExpression: 'gsi1pk = :pk',
 			ExpressionAttributeValues: { ':pk': LEADERBOARD_PK },
 			ScanIndexForward: false,
-			Limit: TOP_LIMIT
+			Limit: TOP_LIMIT,
+			// Pull only the metadata we render in the leaderboard table —
+			// boards can be up to ~98 KB for <8,8,8> and we don't want
+			// 100 of them on the wire just to render a list. Replays
+			// fetch the boards on demand via /scores/{id}.
+			ProjectionExpression: 'id, username, m, n, p, R, Reff, omega, score, solved, submittedAt'
 		})
 	);
 
@@ -188,6 +207,72 @@ async function getTopScores(): Promise<APIGatewayProxyStructuredResultV2> {
 	}));
 
 	return json(200, { entries });
+}
+
+type FullScore = LeaderboardEntry & {
+	A: number[];
+	B: number[];
+	C: number[];
+};
+
+async function getScoreById(id: string): Promise<APIGatewayProxyStructuredResultV2> {
+	// We Query the base table by the partition key alone — there's
+	// exactly one item per id (the SK is the submission timestamp,
+	// which is unknown but irrelevant). Cheaper than maintaining a
+	// second GSI just for id lookups.
+	const out = await ddb.send(
+		new QueryCommand({
+			TableName: TABLE_NAME,
+			KeyConditionExpression: 'pk = :pk',
+			ExpressionAttributeValues: { ':pk': `score#${id}` },
+			Limit: 1
+		})
+	);
+
+	const it = out.Items?.[0];
+	if (!it) return json(404, { error: `score not found: ${id}` });
+
+	const m = Number(it.m);
+	const n = Number(it.n);
+	const p = Number(it.p);
+	const R = Number(it.R);
+
+	// DocumentClient unmarshals B-typed attributes back into Uint8Array.
+	// Validate lengths defensively in case the stored item predates the
+	// boards-stored-on-submit feature.
+	const boardA = it.boardA as Uint8Array | undefined;
+	const boardB = it.boardB as Uint8Array | undefined;
+	const boardC = it.boardC as Uint8Array | undefined;
+	if (
+		!(boardA instanceof Uint8Array) ||
+		!(boardB instanceof Uint8Array) ||
+		!(boardC instanceof Uint8Array) ||
+		boardA.length !== R * m * n ||
+		boardB.length !== R * n * p ||
+		boardC.length !== R * m * p
+	) {
+		return json(410, {
+			error: 'this score predates board storage and cannot be replayed'
+		});
+	}
+
+	const response: FullScore = {
+		id: String(it.id),
+		username: String(it.username),
+		m,
+		n,
+		p,
+		R,
+		Reff: Number(it.Reff),
+		omega: Number(it.omega),
+		score: Number(it.score),
+		solved: Boolean(it.solved),
+		submittedAt: String(it.submittedAt),
+		A: decodeBoardToArray(boardA),
+		B: decodeBoardToArray(boardB),
+		C: decodeBoardToArray(boardC)
+	};
+	return json(200, response);
 }
 
 // ---------------------------------------------------------------------------
@@ -218,4 +303,25 @@ function requireEnv(name: string): string {
 	const v = process.env[name];
 	if (!v) throw new Error(`missing required env var: ${name}`);
 	return v;
+}
+
+// Int8Array → Uint8Array view of the same bytes (zero copy). Cells in
+// {-1, 0, 1} encode as bytes {0xFF, 0x00, 0x01} regardless of which view
+// you reach through, so reinterpreting is safe and round-trips exactly.
+function encodeBoard(arr: Int8Array): Uint8Array {
+	return new Uint8Array(arr.buffer, arr.byteOffset, arr.byteLength);
+}
+
+// Uint8Array (DDB Binary) → JS array of signed -1 | 0 | 1, suitable for
+// JSON. We don't bother with base64 packing: each cell is one byte and
+// even max <8,8,8> stays well under any practical wire-size concern.
+function decodeBoardToArray(bytes: Uint8Array): number[] {
+	const out = new Array<number>(bytes.length);
+	for (let i = 0; i < bytes.length; i++) {
+		const b = bytes[i];
+		// 0xFF → -1, 0x00 → 0, 0x01 → 1. Anything else got into DDB by
+		// some other route and we treat as 0 to keep the response sane.
+		out[i] = b === 0xff ? -1 : b === 1 ? 1 : 0;
+	}
+	return out;
 }

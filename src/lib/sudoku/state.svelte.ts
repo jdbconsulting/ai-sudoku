@@ -51,11 +51,19 @@ export class GameState {
 	// The number of rank slots is always the trivial schoolbook bound m·n·p.
 	// The player lowers the *effective* rank simply by leaving pages blank,
 	// which keeps the controls minimal (no separate "R" dial).
-	get R() { return this.m * this.n * this.p; }
+	get R() {
+		return this.m * this.n * this.p;
+	}
 
-	get sa() { return this.m * this.n; }
-	get sb() { return this.n * this.p; }
-	get sc() { return this.m * this.p; }
+	get sa() {
+		return this.m * this.n;
+	}
+	get sb() {
+		return this.n * this.p;
+	}
+	get sc() {
+		return this.m * this.p;
+	}
 
 	// `fillNaive` seeds the boards with the schoolbook m·n·p algorithm so the
 	// player always starts from a valid (if maximally-ranked) decomposition.
@@ -137,6 +145,30 @@ export class GameState {
 		this.version++;
 	}
 
+	// Apply a leaderboard replay: resize to <m,n,p>, then overwrite the
+	// boards. Accepts plain number[] (what the API delivers as JSON) so
+	// callers don't have to materialise typed arrays first. Throws if
+	// any length doesn't match the (m·n·p)-derived expectation, since
+	// that would silently corrupt the residual.
+	loadFlatBoards(
+		m: number,
+		n: number,
+		p: number,
+		A: ReadonlyArray<number> | Int8Array,
+		B: ReadonlyArray<number> | Int8Array,
+		C: ReadonlyArray<number> | Int8Array
+	): void {
+		const R = m * n * p;
+		if (A.length !== R * m * n) throw new Error(`A length ${A.length} ≠ ${R * m * n}`);
+		if (B.length !== R * n * p) throw new Error(`B length ${B.length} ≠ ${R * n * p}`);
+		if (C.length !== R * m * p) throw new Error(`C length ${C.length} ≠ ${R * m * p}`);
+		this.resize(m, n, p, { fillNaive: false });
+		this.A.set(A as Int8Array);
+		this.B.set(B as Int8Array);
+		this.C.set(C as Int8Array);
+		this.version++;
+	}
+
 	randomize(density = 0.45) {
 		const fill = (arr: Int8Array) => {
 			for (let i = 0; i < arr.length; i++) {
@@ -160,7 +192,7 @@ export class GameState {
 		const pageSize = rows * cols;
 		const idx = page * pageSize + row * cols + col;
 		const cur = arr[idx] as CellValue;
-		const next = dir > 0 ? NEXT[cur] : (((cur + 2 + 1) % 3) - 1) as CellValue;
+		const next = dir > 0 ? NEXT[cur] : ((((cur + 2 + 1) % 3) - 1) as CellValue);
 		arr[idx] = next;
 		this.version++;
 	}
@@ -369,9 +401,7 @@ function expectCube(
 			for (let j = 0; j < cols; j++) {
 				const cell = row[j];
 				if (cell !== -1 && cell !== 0 && cell !== 1) {
-					throw new Error(
-						`"${name}"[${r}][${i}][${j}] must be -1, 0, or 1 (got ${String(cell)}).`
-					);
+					throw new Error(`"${name}"[${r}][${i}][${j}] must be -1, 0, or 1 (got ${String(cell)}).`);
 				}
 				outRow[j] = cell;
 			}

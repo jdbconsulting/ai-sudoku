@@ -2,21 +2,24 @@
 	import { HIGH_SCORES, type HighScore } from './highscores';
 	import {
 		apiEnabled,
+		fetchScoreById,
 		fetchTopScores,
 		LeaderboardError,
+		type FullScore,
 		type LeaderboardEntry
 	} from './leaderboard';
 
 	type Props = {
 		// Parent owns tab state, so opening a new puzzle from the leaderboard
-		// is just a callback. The parent wires it to "create a new tab and
-		// have the entry populate its boards". Only Famous Algorithms have
-		// known board contents we can replay; user-submitted entries don't
-		// (we deliberately don't store boards in v1) so their rows omit the
-		// Play button.
+		// is just a callback. The parent wires each callback to "create a
+		// new tab and apply the boards". Famous Algorithms get the synchronous
+		// path (boards are baked into the static entry); user-submitted
+		// entries get the async path because we have to fetch the boards
+		// from the API first.
 		onPlay: (entry: HighScore) => void;
+		onPlayUserScore: (entry: FullScore) => void;
 	};
-	let { onPlay }: Props = $props();
+	let { onPlay, onPlayUserScore }: Props = $props();
 
 	const fmtScore = new Intl.NumberFormat('en-US');
 	function formatScore(s: number): string {
@@ -66,6 +69,31 @@
 	function formatDate(iso: string): string {
 		const d = new Date(iso);
 		return Number.isFinite(d.getTime()) ? fmtDate.format(d) : iso;
+	}
+
+	// Per-row "Play" loading state. We track by id so multiple rows can
+	// be in-flight simultaneously without their busy spinners colliding,
+	// though in practice the user clicks one at a time.
+	let playingId = $state<string | null>(null);
+	let playError = $state<string | null>(null);
+
+	async function playEntry(entry: LeaderboardEntry) {
+		if (playingId) return;
+		playingId = entry.id;
+		playError = null;
+		try {
+			const full = await fetchScoreById(entry.id);
+			onPlayUserScore(full);
+		} catch (err) {
+			playError =
+				err instanceof LeaderboardError
+					? err.message
+					: err instanceof Error
+						? err.message
+						: String(err);
+		} finally {
+			playingId = null;
+		}
 	}
 </script>
 
@@ -142,6 +170,7 @@
 						</th>
 						<th class="score">Score</th>
 						<th class="solved" title="The submitted boards drove the residual to zero.">✓</th>
+						<th class="actions"></th>
 					</tr>
 				</thead>
 				<tbody>
@@ -157,11 +186,27 @@
 							<td class="omega">{e.omega.toFixed(3)}</td>
 							<td class="score">{formatScore(e.score)}</td>
 							<td class="solved">{e.solved ? '★' : ''}</td>
+							<td class="actions">
+								<button
+									type="button"
+									class="play"
+									disabled={playingId !== null}
+									onclick={() => playEntry(e)}
+									title={`Open ${e.username}'s ⟨${e.m},${e.n},${e.p}⟩ submission in a new puzzle tab`}
+								>
+									{playingId === e.id ? '…' : 'Play →'}
+								</button>
+							</td>
 						</tr>
 					{/each}
 				</tbody>
 			</table>
 		</div>
+		{#if playError}
+			<p class="row-error" role="status" aria-live="polite">
+				Couldn't open replay: <strong>{playError}</strong>
+			</p>
+		{/if}
 	{/if}
 </section>
 
@@ -332,6 +377,18 @@
 		border-color: oklch(0.55 0.18 25 / 0.5);
 		background: oklch(0.32 0.1 25 / 0.15);
 		color: rgb(252 165 165);
+	}
+	.row-error {
+		margin: 0.6rem 0 0;
+		padding: 0.55rem 0.8rem;
+		border-radius: 8px;
+		border: 1px solid oklch(0.55 0.18 25 / 0.5);
+		background: oklch(0.32 0.1 25 / 0.15);
+		color: rgb(252 165 165);
+		font-size: 0.8rem;
+	}
+	.row-error strong {
+		color: rgb(254 215 215);
 	}
 	.empty strong {
 		color: rgb(248 250 252);

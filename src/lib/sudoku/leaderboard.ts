@@ -37,6 +37,15 @@ export type LeaderboardEntry = {
 	submittedAt: string;
 };
 
+// Full record including the original boards — fetched on demand when
+// the user clicks Play on a leaderboard row, so we don't pay the bytes
+// for boards we never replay.
+export type FullScore = LeaderboardEntry & {
+	A: number[];
+	B: number[];
+	C: number[];
+};
+
 export type SubmitResult = LeaderboardEntry;
 
 export class LeaderboardError extends Error {
@@ -64,6 +73,24 @@ export async function fetchTopScores(signal?: AbortSignal): Promise<LeaderboardE
 	}
 	const body = (await res.json()) as { entries?: LeaderboardEntry[] };
 	return body.entries ?? [];
+}
+
+// Fetch the full submission (including A/B/C boards) for replay.
+// Throws LeaderboardError on 404 / 410 / network failures so callers
+// can surface a useful message in the UI.
+export async function fetchScoreById(id: string, signal?: AbortSignal): Promise<FullScore> {
+	if (!apiEnabled) {
+		throw new LeaderboardError('Leaderboard API is not configured for this build', 0);
+	}
+	const res = await fetch(`${API_BASE}/scores/${encodeURIComponent(id)}`, {
+		method: 'GET',
+		signal,
+		headers: { accept: 'application/json' }
+	});
+	if (!res.ok) {
+		throw new LeaderboardError(await readError(res), res.status);
+	}
+	return (await res.json()) as FullScore;
 }
 
 export async function submitScore(

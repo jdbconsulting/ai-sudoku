@@ -3,6 +3,7 @@
 	import HighScoreBoard from '$lib/sudoku/HighScoreBoard.svelte';
 	import { GameState } from '$lib/sudoku/state.svelte';
 	import type { HighScore } from '$lib/sudoku/highscores';
+	import type { FullScore } from '$lib/sudoku/leaderboard';
 
 	// Two flavours of tab: a single permanent "high score board" pinned on
 	// the left (id = LEADERBOARD_ID, can't be closed), and any number of
@@ -46,6 +47,17 @@
 		// are never overwritten.
 		const t = newGameTab();
 		entry.apply(t.game);
+		tabs.push(t);
+		activeId = t.id;
+	}
+
+	function openUserScore(entry: FullScore) {
+		// Same non-destructive policy as openHighScore: every replay
+		// click gets its own tab. The HighScoreBoard already awaited
+		// the API fetch, so by the time we get here the boards are in
+		// hand and applying them is synchronous.
+		const t = newGameTab();
+		t.game.loadFlatBoards(entry.m, entry.n, entry.p, entry.A, entry.B, entry.C);
 		tabs.push(t);
 		activeId = t.id;
 	}
@@ -135,17 +147,11 @@
 </svelte:head>
 
 <div class="prize-stack" role="status" aria-label="Prize announcements">
-	<div
-		class="prize-banner gold"
-		title="First player to score 100 or higher wins US$10,000"
-	>
+	<div class="prize-banner gold" title="First player to score 100 or higher wins US$10,000">
 		<span class="prize-amount">US$10,000</span>
 		<span class="prize-text">prize for the first score of 100 or higher!</span>
 	</div>
-	<div
-		class="prize-banner silver"
-		title="First player to score 50 or higher wins US$1,000"
-	>
+	<div class="prize-banner silver" title="First player to score 50 or higher wins US$1,000">
 		<span class="prize-amount">US$1,000</span>
 		<span class="prize-text">prize for the first score of 50 or higher!</span>
 	</div>
@@ -186,18 +192,22 @@
 		<div class="help-dialog-inner">
 			<h2 id="help-title">How to play</h2>
 			<p class="tagline">
-				Help make AI faster by inventing a new algorithm! When you play this game and achieve
-				a new high score, you have discovered a new algorithm that will directly improve the
-				performance of AI. Each puzzle gives you three small grids —
+				Help make AI faster by inventing a new algorithm! When you play this game and achieve a new
+				high score, you have discovered a new algorithm that will directly improve the performance
+				of AI. Each puzzle gives you three small grids —
 				<code>A</code>, <code>B</code>, and <code>C</code> — whose cells you set to
 				<code>−1</code>, <code>0</code>, or <code>+1</code>. Your goal is to wipe the bottom
-				<em>residual</em> grid completely clean while filling in as few pages as possible.
-				Larger boards are harder to solve, but the reward is greater.
+				<em>residual</em> grid completely clean while filling in as few pages as possible. Larger boards
+				are harder to solve, but the reward is greater.
 			</p>
 
 			<h3>Controls</h3>
 			<ul class="instr">
-				<li><strong>Click</strong> a cell to cycle <code>0 → +1 → −1 → 0</code>. <strong>Shift-click</strong> reverses; <strong>right-click</strong> resets to 0.</li>
+				<li>
+					<strong>Click</strong> a cell to cycle <code>0 → +1 → −1 → 0</code>.
+					<strong>Shift-click</strong>
+					reverses; <strong>right-click</strong> resets to 0.
+				</li>
 				<li><strong>Click + drag</strong> rotates the 3D stack (flick to spin).</li>
 				<li><strong>Scroll</strong> over a board to step through its rank pages.</li>
 				<li>Click the small corner tab on a page to make it the active page.</li>
@@ -206,33 +216,33 @@
 
 			<h3>Why it matters</h3>
 			<p class="meta-text">
-				The schoolbook way to multiply two matrices uses <code>M·N·P</code> multiplications.
-				In 1969, Strassen showed that two <code>2×2</code> matrices need only <strong>7</strong>
-				multiplications instead of the obvious <strong>8</strong> — a small win that compounds
-				into a much faster algorithm at large scales. DeepMind's AlphaTensor recently used AI to
-				find similar tricks for bigger matrices, using only <code>−1</code>, <code>0</code>, and
+				The schoolbook way to multiply two matrices uses <code>M·N·P</code> multiplications. In
+				1969, Strassen showed that two <code>2×2</code> matrices need only <strong>7</strong>
+				multiplications instead of the obvious <strong>8</strong> — a small win that compounds into
+				a much faster algorithm at large scales. DeepMind's AlphaTensor recently used AI to find
+				similar tricks for bigger matrices, using only <code>−1</code>, <code>0</code>, and
 				<code>+1</code>. This game is a hands-on sandbox for that same search. It is called a
 				<code>bilinear</code> algorithm because it is a generalization of matrix multiplication.
 			</p>
 
 			<h3>Scoring</h3>
 			<p class="meta-text">
-				Every page you fill in counts against you, and any leftover error in the residual grid
-				adds to that tally. Fewer pages → faster algorithm → an exponentially bigger score.
-				Doing worse than the schoolbook algorithm gives a negative score, down to
+				Every page you fill in counts against you, and any leftover error in the residual grid adds
+				to that tally. Fewer pages → faster algorithm → an exponentially bigger score. Doing worse
+				than the schoolbook algorithm gives a negative score, down to
 				<code>−1,000,000</code>.
 			</p>
 			<p class="meta-text">
 				The <code>+1,000,000</code> ceiling sits at the conjectured asymptotic limit
-				<code>ω = 2</code>, but no recursive base case can hit it exactly — divide-and-conquer
-				adds a <code>log N</code> factor from the combine step that keeps the
+				<code>ω = 2</code>, but no recursive base case can hit it exactly — divide-and-conquer adds
+				a <code>log N</code> factor from the combine step that keeps the
 				<em>effective</em> exponent slightly above 2. So the cap is approached, never reached;
 				bigger <code>⟨m,n,p⟩</code> have shallower recursions and approach it more closely.
 			</p>
 			<p class="meta-text prize-note">
-				<strong>Prize:</strong> if you achieve a score you believe is eligible for a
-				prize, save your game to a file using the <strong>Save game…</strong> button
-				and send it to the company linked at the bottom of the page.
+				<strong>Prize:</strong> if you achieve a score you believe is eligible for a prize, save
+				your game to a file using the <strong>Save game…</strong> button and send it to the company linked
+				at the bottom of the page.
 			</p>
 
 			<div class="dialog-actions">
@@ -284,7 +294,7 @@
 
 	{#key activeTab.id}
 		{#if activeTab.kind === 'leaderboard'}
-			<HighScoreBoard onPlay={openHighScore} />
+			<HighScoreBoard onPlay={openHighScore} onPlayUserScore={openUserScore} />
 		{:else}
 			<Game game={activeTab.game} />
 		{/if}
@@ -363,7 +373,9 @@
 		font-size: 0.78rem;
 		letter-spacing: 0.04em;
 		color: rgb(15 23 42);
-		box-shadow: 0 6px 18px rgba(0, 0, 0, 0.35), 0 0 0 1px oklch(0.95 0.12 90 / 0.35) inset;
+		box-shadow:
+			0 6px 18px rgba(0, 0, 0, 0.35),
+			0 0 0 1px oklch(0.95 0.12 90 / 0.35) inset;
 		max-width: 100%;
 	}
 	.prize-banner.gold {
@@ -373,7 +385,9 @@
 	.prize-banner.silver {
 		background: linear-gradient(135deg, oklch(0.92 0.02 250), oklch(0.78 0.03 250));
 		border: 1px solid oklch(0.6 0.02 250);
-		box-shadow: 0 6px 18px rgba(0, 0, 0, 0.3), 0 0 0 1px oklch(0.96 0.01 250 / 0.5) inset;
+		box-shadow:
+			0 6px 18px rgba(0, 0, 0, 0.3),
+			0 0 0 1px oklch(0.96 0.01 250 / 0.5) inset;
 	}
 	.prize-amount {
 		font-weight: 800;
@@ -460,7 +474,10 @@
 		background: oklch(0.22 0.03 240 / 0.7);
 		border: 1px solid rgb(51 65 85);
 		cursor: pointer;
-		transition: background-color 120ms ease, color 120ms ease, border-color 120ms ease;
+		transition:
+			background-color 120ms ease,
+			color 120ms ease,
+			border-color 120ms ease;
 	}
 	.help-btn:hover {
 		background: oklch(0.32 0.05 240 / 0.9);
@@ -641,7 +658,10 @@
 		white-space: nowrap;
 		position: relative;
 		top: 1px; /* sit on top of the bottom border */
-		transition: background-color 120ms ease, color 120ms ease, border-color 120ms ease;
+		transition:
+			background-color 120ms ease,
+			color 120ms ease,
+			border-color 120ms ease;
 	}
 	.tab:hover {
 		background: oklch(0.22 0.03 240 / 0.7);
