@@ -105,8 +105,9 @@
 		name="description"
 		content="A puzzle game where you discover bilinear matrix multiplication algorithms by zeroing out the residual tensor."
 	/>
+	<meta name="author" content="JD Brinton" />
 
-	<meta property="og:type" content="website" />
+	<meta property="og:type" content="article" />
 	<meta property="og:site_name" content="AI Sudoku" />
 	<meta property="og:title" content="AI Sudoku — Find a faster matrix multiplication algorithm" />
 	<meta
@@ -114,19 +115,22 @@
 		content="A puzzle game where you discover bilinear matrix multiplication algorithms by zeroing out the residual tensor."
 	/>
 	<meta property="og:url" content="https://ai-sudoku.org/" />
-	<meta property="og:image" content="https://ai-sudoku.org/icon-512.png" />
+	<meta property="og:image" content="https://ai-sudoku.org/og-image.png" />
 	<meta property="og:image:type" content="image/png" />
-	<meta property="og:image:width" content="512" />
-	<meta property="og:image:height" content="512" />
+	<meta property="og:image:width" content="1200" />
+	<meta property="og:image:height" content="630" />
 	<meta property="og:image:alt" content="AI Sudoku logo" />
 
-	<meta name="twitter:card" content="summary" />
+	<meta property="article:author" content="https://jdbrinton.consulting" />
+	<meta property="article:published_time" content="2026-05-07T00:00:00Z" />
+
+	<meta name="twitter:card" content="summary_large_image" />
 	<meta name="twitter:title" content="AI Sudoku — Find a faster matrix multiplication algorithm" />
 	<meta
 		name="twitter:description"
 		content="A puzzle game where you discover bilinear matrix multiplication algorithms by zeroing out the residual tensor."
 	/>
-	<meta name="twitter:image" content="https://ai-sudoku.org/icon-512.png" />
+	<meta name="twitter:image" content="https://ai-sudoku.org/og-image.png" />
 	<meta name="twitter:image:alt" content="AI Sudoku logo" />
 </svelte:head>
 
