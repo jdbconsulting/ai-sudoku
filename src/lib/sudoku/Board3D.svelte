@@ -874,4 +874,15 @@
 		background: oklch(0.28 0.05 var(--hue) / 0.9);
 		border-color: oklch(0.6 0.14 var(--hue));
 	}
+
+	@media (max-width: 540px) {
+		/* Drop the desktop min-width on phones. With page + card padding
+		   the available column on a 320–375px viewport can be narrower
+		   than 240px, which would otherwise force the square canvas to
+		   overflow and trigger horizontal scrolling. The aspect-ratio
+		   rule still keeps the canvas square at whatever width fits. */
+		.canvas-container {
+			min-width: 0;
+		}
+	}
 </style>

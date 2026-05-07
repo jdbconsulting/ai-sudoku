@@ -398,12 +398,33 @@
 		font-weight: 600;
 	}
 	@media (max-width: 540px) {
+		/* On phones the fixed top-right banners overlap the header and help
+		   button. Drop them out of the overlay layer and let them sit in
+		   normal page flow instead — since the prize-stack precedes
+		   `.page` in the DOM, they end up as a clean header strip without
+		   obstructing anything underneath. */
+		.prize-stack {
+			position: static;
+			align-items: stretch;
+			max-width: none;
+			gap: 0.3rem;
+			padding: 0.55rem 0.6rem 0;
+			pointer-events: auto;
+		}
 		.prize-banner {
 			font-size: 0.7rem;
 			padding: 0.35rem 0.65rem;
+			justify-content: center;
 		}
 		.prize-amount {
 			font-size: 0.82rem;
+		}
+		/* Tighten page gutters on phones so 240–280px-wide boards don't
+		   need horizontal scrolling. The clamp() on desktop padding keeps
+		   the wider rule untouched. */
+		.page {
+			padding: 0.6rem 0.6rem 3rem;
+			gap: 1rem;
 		}
 	}
 

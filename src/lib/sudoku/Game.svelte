@@ -458,4 +458,16 @@
 			grid-template-columns: 1fr;
 		}
 	}
+
+	@media (max-width: 540px) {
+		/* Trim card gutters on phones so the square Board3D canvas can use
+		   nearly the full viewport width inside the boards card and the
+		   residual matrix isn't pinched by 1.25rem of inner padding. */
+		.card {
+			padding: 0.75rem 0.6rem;
+		}
+		.residual-section {
+			padding: 0.6rem;
+		}
+	}
 </style>
