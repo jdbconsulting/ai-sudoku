@@ -820,9 +820,6 @@
 				{/if}
 			{/each}
 		</div>
-		<div class="dims">
-			<span>{rows}</span>×<span>{cols}</span>×<span class="rdim">{R}</span>
-		</div>
 	</div>
 	<div class="canvas-row" style:--hue={hue}>
 		<!-- Mobile-only vertical page picker. Top of the slider = page 0
@@ -902,15 +899,6 @@
 		   a smaller, link-styled jump-to-board control. */
 		display: none;
 		text-decoration: none;
-	}
-	.dims {
-		font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-		font-size: 0.72rem;
-		color: rgb(148 163 184);
-	}
-	.rdim {
-		color: rgb(248 250 252);
-		font-weight: 600;
 	}
 	.canvas-row {
 		/* `--hue` is set inline per board (A=blue/230, B=pink/340,
