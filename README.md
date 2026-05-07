@@ -107,6 +107,7 @@ For comparison, real published algorithms sit firmly in the multiplications-domi
 | algorithm                | `<m,n,p>` | R   | ω      | score |
 | ------------------------ | --------- | --- | ------ | ----- |
 | Strassen (1969)          | `<2,2,2>` | 7   | 2.8074 | 14    |
+| Laderman (1976)          | `<3,3,3>` | 23  | 2.8540 | 8     |
 | AlphaTensor `<2,3,3>`    | `<2,3,3>` | 15  | 2.8108 | 14    |
 | AlphaTensor `<4,4,4>`    | `<4,4,4>` | 49  | 2.8074 | 14    |
 | AlphaTensor `<5,5,7>`    | `<5,5,7>` | 134 | 2.8449 | 9     |

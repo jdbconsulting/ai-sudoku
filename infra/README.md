@@ -173,6 +173,172 @@ HTTP/1.1 200 OK
 }
 ```
 
+### `GET /scores/{id}`
+
+Same shape as the entries above, plus the original boards as flat
+arrays (`A`, `B`, `C` of `R·m·n`, `R·n·p`, `R·m·p` cells). Used by the
+Play button on the leaderboard so a user can pick up someone else's
+submission as a starting point. Returns `410 Gone` on entries submitted
+before board storage was added.
+
+### `POST /events/game-started`
+
+Fire-and-forget telemetry. The browser sends one beacon every time the
+player starts a game (new tab, resize, or replay) so we can answer
+"which board sizes are people actually trying?" without bolting on a
+third-party analytics SDK.
+
+```jsonc
+{
+	"m": 2,
+	"n": 2,
+	"p": 2,
+	"source": "new" | "resize" | "famous" | "replay"
+}
+```
+
+Server response is `204 No Content`. Validation failures return `400`
+but are not surfaced to the user (the call is fired with
+`navigator.sendBeacon`, whose response is unreadable by spec). The
+server stitches the request envelope onto the row before storing:
+
+| field            | source                                       |
+| ---------------- | -------------------------------------------- |
+| `ipPrefix`       | `requestContext.http.sourceIp`, anonymised   |
+| `userAgent`      | `requestContext.http.userAgent` (raw string) |
+| `clientCategory` | UA classified `mobile`/`tablet`/`desktop`/`bot`/`unknown` |
+| `clientBrowser`  | `Chrome`/`Firefox`/`Safari`/`Edge`/`Opera`/`Brave` (or unset) |
+| `clientOs`       | `Windows`/`macOS`/`Linux`/`iOS`/`Android`/… (or unset) |
+
+**IP anonymisation.** Before writing to DynamoDB the IP is truncated to
+the network prefix:
+
+- IPv4 → `/24` (last octet zeroed): `203.0.113.42` → `203.0.113.0`
+- IPv6 → `/48` (keep first three hextets): `2001:db8:abc:1::1` → `2001:db8:abc::`
+
+That's enough resolution for rough geographic / ISP-level trends and
+abuse triage, without storing identifying personal data. The full IP
+never lands in DynamoDB or in our own application logs (CloudWatch may
+retain its own request-line logs from the Lambda Function URL — that's
+an AWS-side concern; you can disable Function URL access logging if
+you want zero-PII end-to-end).
+
+Events live in the same DynamoDB table:
+
+```
+pk = "event#game-started"
+sk = "<ISO timestamp>#<uuid>"     # uuid de-duplicates sub-ms collisions
+```
+
+There is **no TTL** configured on the table. If the events partition
+grows uncomfortably large (millions of rows is fine; tens of millions
+isn't), enable a TTL once and write a `ttl` attribute (epoch seconds)
+on each new event:
+
+```bash
+aws dynamodb update-time-to-live \
+	--table-name ai-sudoku-scores-prod \
+	--time-to-live-specification 'Enabled=true,AttributeName=ttl'
+```
+
+(Existing scores have no `ttl` attribute and are unaffected.)
+
+#### Querying the events
+
+The stack lives in `us-west-2`, so every AWS CLI call needs `--region
+us-west-2` (or `export AWS_REGION=us-west-2` once per shell). Without
+it the CLI defaults to whatever's in `~/.aws/config` and you'll get a
+`ResourceNotFoundException` even though the table exists.
+
+Sanity check that the table is where you think it is:
+
+```bash
+aws dynamodb list-tables --region us-west-2
+# → ai-sudoku-scores-prod
+```
+
+DynamoDB Query, newest first (last 50 game-start events):
+
+```bash
+aws dynamodb query \
+	--region us-west-2 \
+	--table-name ai-sudoku-scores-prod \
+	--key-condition-expression 'pk = :pk' \
+	--expression-attribute-values '{":pk":{"S":"event#game-started"}}' \
+	--no-scan-index-forward \
+	--limit 50
+```
+
+Same query, but flatten DDB's `{S: …, N: …}` envelope into something
+your eyeballs can scan — drop `| jq …` to see the raw shape:
+
+```bash
+aws dynamodb query \
+	--region us-west-2 \
+	--table-name ai-sudoku-scores-prod \
+	--key-condition-expression 'pk = :pk' \
+	--expression-attribute-values '{":pk":{"S":"event#game-started"}}' \
+	--no-scan-index-forward --limit 50 \
+| jq -r '.Items[] | [.ts.S, .source.S, "\(.m.N)x\(.n.N)x\(.p.N)",
+		.clientCategory.S, (.clientBrowser.S // "-"),
+		(.clientOs.S // "-"), .ipPrefix.S] | @tsv' \
+| column -t -s $'\t'
+```
+
+Filter to just one source (`new`/`resize`/`famous`/`replay`) — note
+that `source` is a reserved word in DDB expressions, so it has to be
+aliased via `--expression-attribute-names`:
+
+```bash
+aws dynamodb query \
+	--region us-west-2 \
+	--table-name ai-sudoku-scores-prod \
+	--key-condition-expression 'pk = :pk' \
+	--filter-expression '#s = :src' \
+	--expression-attribute-names '{"#s":"source"}' \
+	--expression-attribute-values \
+		'{":pk":{"S":"event#game-started"},":src":{"S":"replay"}}' \
+	--no-scan-index-forward --limit 50
+```
+
+Filter to a date range — the `sk` starts with the ISO timestamp, so
+`begins_with(sk, "2026-05-")` gets one month of data without a scan:
+
+```bash
+aws dynamodb query \
+	--region us-west-2 \
+	--table-name ai-sudoku-scores-prod \
+	--key-condition-expression 'pk = :pk AND begins_with(sk, :day)' \
+	--expression-attribute-values \
+		'{":pk":{"S":"event#game-started"},":day":{"S":"2026-05-07"}}'
+```
+
+Total event count (Query is paginated at 1 MB; this drives it through
+all pages and just sums):
+
+```bash
+aws dynamodb query \
+	--region us-west-2 \
+	--table-name ai-sudoku-scores-prod \
+	--key-condition-expression 'pk = :pk' \
+	--expression-attribute-values '{":pk":{"S":"event#game-started"}}' \
+	--select COUNT --no-paginate \
+| jq '.Count'
+```
+
+For deeper analysis, export the partition once and join in
+pandas / sqlite:
+
+```bash
+aws dynamodb query \
+	--region us-west-2 \
+	--table-name ai-sudoku-scores-prod \
+	--key-condition-expression 'pk = :pk' \
+	--expression-attribute-values '{":pk":{"S":"event#game-started"}}' \
+	--no-paginate \
+> events.json
+```
+
 ## Anti-cheat (v1)
 
 What the server enforces:
@@ -208,8 +374,8 @@ infra/
 └── api/                  # Lambda CodeUri
     ├── package.json      # lib-dynamodb + esbuild (bundled) + dev deps
     ├── tsconfig.json
-    ├── handler.ts        # entry point: routes POST /scores, GET /scores/top
-    ├── sanitize.ts       # username + payload validation (pure)
+    ├── handler.ts        # entry point: routes /scores/* and /events/*
+    ├── sanitize.ts       # username + payload + event validation, IP/UA helpers
     └── tensor.ts         # SYMLINK → ../../src/lib/sudoku/tensor.ts
 ```
 

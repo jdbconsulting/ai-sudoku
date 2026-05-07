@@ -4,6 +4,7 @@
 	import { GameState } from '$lib/sudoku/state.svelte';
 	import type { HighScore } from '$lib/sudoku/highscores';
 	import type { FullScore } from '$lib/sudoku/leaderboard';
+	import { logGameStarted } from '$lib/sudoku/analytics';
 
 	// Two flavours of tab: a single permanent "high score board" pinned on
 	// the left (id = LEADERBOARD_ID, can't be closed), and any number of
@@ -39,6 +40,12 @@
 		const t = newGameTab();
 		tabs.push(t);
 		activeId = t.id;
+		// Fresh tabs always start at the default ⟨2,2,2⟩ — see newGameTab().
+		// Logging it here (rather than inside newGameTab itself) keeps the
+		// 'famous'/'replay' paths from double-counting: those construct a
+		// tab and then immediately resize, so they should be the *only*
+		// telemetry event the server sees for that user action.
+		logGameStarted(t.game.m, t.game.n, t.game.p, 'new');
 	}
 
 	function openHighScore(entry: HighScore) {
@@ -49,6 +56,7 @@
 		entry.apply(t.game);
 		tabs.push(t);
 		activeId = t.id;
+		logGameStarted(t.game.m, t.game.n, t.game.p, 'famous');
 	}
 
 	function openUserScore(entry: FullScore) {
@@ -60,6 +68,7 @@
 		t.game.loadFlatBoards(entry.m, entry.n, entry.p, entry.A, entry.B, entry.C);
 		tabs.push(t);
 		activeId = t.id;
+		logGameStarted(entry.m, entry.n, entry.p, 'replay');
 	}
 
 	function closeTab(id: number, event?: Event) {
@@ -239,6 +248,41 @@
 				<em>effective</em> exponent slightly above 2. So the cap is approached, never reached;
 				bigger <code>⟨m,n,p⟩</code> have shallower recursions and approach it more closely.
 			</p>
+			<p class="meta-text">
+				Concretely, here is the maximum rank <code>R</code> you can land at on a few small cube
+				boards and still clear each prize tier (assuming a fully-solved residual). Smaller boards
+				are tougher: the integer rank ladder is short, so each step you save matters more.
+			</p>
+			<table class="prize-table">
+				<thead>
+					<tr>
+						<th>Board</th>
+						<th>US$1,000 (score ≥ 100)</th>
+						<th>US$10,000 (score ≥ 1,000)</th>
+						<th>For reference</th>
+					</tr>
+				</thead>
+				<tbody>
+					<tr>
+						<td><code>⟨2,2,2⟩</code></td>
+						<td><code>R ≤ 6</code></td>
+						<td><code>R ≤ 5</code></td>
+						<td>Strassen <code>R = 7</code> (score 14)</td>
+					</tr>
+					<tr>
+						<td><code>⟨3,3,3⟩</code></td>
+						<td><code>R ≤ 18</code></td>
+						<td><code>R ≤ 15</code></td>
+						<td>Schoolbook <code>R = 27</code></td>
+					</tr>
+					<tr>
+						<td><code>⟨4,4,4⟩</code></td>
+						<td><code>R ≤ 40</code></td>
+						<td><code>R ≤ 32</code></td>
+						<td>AlphaTensor <code>R = 49</code> (score 14)</td>
+					</tr>
+				</tbody>
+			</table>
 			<p class="meta-text prize-note">
 				<strong>Prize:</strong> if you achieve a score you believe is eligible for a prize, save
 				your game to a file using the <strong>Save game…</strong> button and send it to the company linked
@@ -423,9 +467,14 @@
 		   need horizontal scrolling. The clamp() on desktop padding keeps
 		   the wider rule untouched. `overflow-x: clip` is a final
 		   safeguard so any stray child overflow (e.g. a momentarily
-		   oversized canvas) never produces a horizontal scrollbar. */
+		   oversized canvas) never produces a horizontal scrollbar.
+		   The bottom padding clears the *two* stacked fixed bars on
+		   game tabs — the full residual panel (capped at 40dvh in
+		   ResidualGrid.svelte) sitting on top of the mobile score bar
+		   (≈3rem) — plus the iOS home-indicator inset, so the footer
+		   never disappears under either. */
 		.page {
-			padding: 0.6rem 0.6rem 3rem;
+			padding: 0.6rem 0.6rem calc(40dvh + 3rem + env(safe-area-inset-bottom, 0px));
 			gap: 1rem;
 			overflow-x: clip;
 		}
@@ -591,6 +640,43 @@
 	}
 	.help-dialog .prize-note strong {
 		color: oklch(0.88 0.18 90);
+	}
+	.help-dialog .prize-table {
+		width: 100%;
+		margin: 0.6rem 0;
+		border-collapse: collapse;
+		font-size: 0.78rem;
+		font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+		color: rgb(203 213 225);
+	}
+	.help-dialog .prize-table th,
+	.help-dialog .prize-table td {
+		padding: 0.4rem 0.6rem;
+		text-align: left;
+		border-bottom: 1px solid rgb(30 41 59);
+	}
+	.help-dialog .prize-table th {
+		font-weight: 600;
+		color: rgb(148 163 184);
+		text-transform: uppercase;
+		letter-spacing: 0.04em;
+		font-size: 0.7rem;
+		border-bottom-color: rgb(51 65 85);
+	}
+	.help-dialog .prize-table tbody tr:last-child td {
+		border-bottom: none;
+	}
+	.help-dialog .prize-table code {
+		color: rgb(125 211 252);
+	}
+	@media (max-width: 540px) {
+		.help-dialog .prize-table {
+			font-size: 0.72rem;
+		}
+		.help-dialog .prize-table th,
+		.help-dialog .prize-table td {
+			padding: 0.35rem 0.4rem;
+		}
 	}
 
 	.dialog-close {

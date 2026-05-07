@@ -6,6 +6,25 @@
 	type Props = { game: GameState; board: Board; title: string; hue: number };
 	let { game, board, title, hue }: Props = $props();
 
+	// Static board roster used by the mobile-only navigation row in the
+	// header. Hues mirror the per-board hue prop Game.svelte sets when
+	// rendering each Board3D (A=230 blue, B=340 pink, C=45 amber); if
+	// those ever change, update this list to match.
+	const NAV_BOARDS: { board: Board; title: string; hue: number }[] = [
+		{ board: 'A', title: 'A', hue: 230 },
+		{ board: 'B', title: 'B', hue: 340 },
+		{ board: 'C', title: 'C', hue: 45 }
+	];
+
+	function scrollToBoard(e: Event, target: Board) {
+		// Smooth-scroll to the sibling Board3D's wrap. preventDefault on
+		// the anchor click so the browser doesn't append a `#board-X`
+		// fragment to the URL or break smooth-scroll into a hard jump.
+		e.preventDefault();
+		const el = document.getElementById(`board-${target}`);
+		el?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+	}
+
 	// === Reactive views into game state =====================================
 
 	let R = $derived(game.R);
@@ -119,8 +138,12 @@
 				toneMapped: false
 			});
 		}
+		// Empty (unpicked) cells share a single yellow across all three
+		// boards — a neutral "neither + nor −" state that contrasts with
+		// the green/red glyph textures and is distinct from each board's
+		// own hue. updateActiveStyles() still dims this on inactive pages.
 		return new THREE.MeshBasicMaterial({
-			color: hueColor(0.22, 0.05, hue),
+			color: hueColor(0.55, 0.17, 60),
 			transparent: false,
 			opacity: 1,
 			depthWrite: true,
@@ -373,10 +396,10 @@
 			// punch a clean hole through the back of the stack — back-side
 			// inactive pages don't bleed through. Inactive pages: cells
 			// rendered as transparent + depthWrite false at "slightly
-			// dimmer" 0.7 opacity, so they're clearly visible context.
+			// dimmer" 0.4 opacity, so they're clearly visible context.
 			// The big gap around the active page guarantees inactive pages
 			// don't visually crowd the active one.
-			const cellOp = isActive ? 1.0 : 0.7;
+			const cellOp = isActive ? 1.0 : 0.4;
 			const frameOp = isActive ? 1.0 : 0.5;
 			const bgOp = isActive ? 0.0 : 0.08;
 
@@ -770,37 +793,81 @@
 	});
 </script>
 
-<div class="board-wrap">
+<div class="board-wrap" id={`board-${board}`}>
 	<div class="board-header">
-		<h3 class="title" style:color={`oklch(0.78 0.18 ${hue})`}>{title}</h3>
+		<!-- 1×3 navigation row of board labels. The active board's letter
+		     is rendered as the heading; the other two are anchor links
+		     that smooth-scroll to that board's wrap. On desktop the
+		     non-active letters are display:none, so the header looks
+		     unchanged there. -->
+		<div class="title-row">
+			{#each NAV_BOARDS as nb (nb.board)}
+				{#if nb.board === board}
+					<h3 class="title self" style:color={`oklch(0.78 0.18 ${nb.hue})`}>
+						{nb.title}
+					</h3>
+				{:else}
+					<a
+						class="title other"
+						href={`#board-${nb.board}`}
+						onclick={(e) => scrollToBoard(e, nb.board)}
+						style:color={`oklch(0.78 0.18 ${nb.hue})`}
+						aria-label={`Jump to board ${nb.title}`}
+						title={`Jump to board ${nb.title}`}
+					>
+						{nb.title}
+					</a>
+				{/if}
+			{/each}
+		</div>
 		<div class="dims">
 			<span>{rows}</span>×<span>{cols}</span>×<span class="rdim">{R}</span>
 		</div>
 	</div>
-	<div class="canvas-container" bind:this={containerEl} style:--hue={hue}>
-		<canvas
-			bind:this={canvasEl}
-			oncontextmenu={onContextMenu}
-			onpointerdown={onPointerDown}
-			onpointermove={onPointerMove}
-			onpointerup={onPointerUp}
-			onpointercancel={onPointerCancel}
-			onwheel={onWheel}
-			onpointerleave={() => {
-				canvasEl.style.cursor = 'default';
-			}}
-			aria-label={`Board ${title}, 3D rank-page stack. Active page ${activePage + 1} of ${R}.`}
-		></canvas>
-		{#if userRotX !== DEFAULT_ROT_X || userRotY !== DEFAULT_ROT_Y || userRotZ !== 0}
-			<button
-				type="button"
-				class="reset-view"
-				onclick={resetView}
-				title="Reset view orientation"
-			>
-				⟲ Reset view
-			</button>
-		{/if}
+	<div class="canvas-row" style:--hue={hue}>
+		<!-- Mobile-only vertical page picker. Top of the slider = page 0
+		     (closest to the camera), bottom = page R-1 (farthest). Tied
+		     one-way to activePage so external page changes (tab clicks,
+		     wheel, page-spacing slider edits) keep it in sync. Hidden on
+		     desktop, where the on-canvas tabs already work well with a
+		     mouse. -->
+		<input
+			type="range"
+			class="page-slider"
+			min="0"
+			max={Math.max(0, R - 1)}
+			step="1"
+			value={activePage}
+			oninput={(e) => setActive(Number((e.currentTarget as HTMLInputElement).value))}
+			aria-label={`Active page on board ${title}`}
+			aria-valuetext={`Page ${activePage + 1} of ${R}`}
+			title={`Active page ${activePage + 1} of ${R}`}
+		/>
+		<div class="canvas-container" bind:this={containerEl}>
+			<canvas
+				bind:this={canvasEl}
+				oncontextmenu={onContextMenu}
+				onpointerdown={onPointerDown}
+				onpointermove={onPointerMove}
+				onpointerup={onPointerUp}
+				onpointercancel={onPointerCancel}
+				onwheel={onWheel}
+				onpointerleave={() => {
+					canvasEl.style.cursor = 'default';
+				}}
+				aria-label={`Board ${title}, 3D rank-page stack. Active page ${activePage + 1} of ${R}.`}
+			></canvas>
+			{#if userRotX !== DEFAULT_ROT_X || userRotY !== DEFAULT_ROT_Y || userRotZ !== 0}
+				<button
+					type="button"
+					class="reset-view"
+					onclick={resetView}
+					title="Reset view orientation"
+				>
+					⟲ Reset view
+				</button>
+			{/if}
+		</div>
 	</div>
 </div>
 
@@ -817,11 +884,24 @@
 		align-items: center;
 		line-height: 1.1;
 	}
+	.title-row {
+		display: flex;
+		align-items: baseline;
+		gap: 0.6rem;
+	}
 	.title {
 		font-size: 1.4rem;
 		font-weight: 700;
 		letter-spacing: 0.06em;
 		text-shadow: 0 0 18px color-mix(in oklch, currentColor 60%, transparent);
+		margin: 0;
+	}
+	.title.other {
+		/* Hidden on desktop — the active title alone is enough there.
+		   Revealed on mobile by the `(max-width: 540px)` block below as
+		   a smaller, link-styled jump-to-board control. */
+		display: none;
+		text-decoration: none;
 	}
 	.dims {
 		font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
@@ -832,10 +912,24 @@
 		color: rgb(248 250 252);
 		font-weight: 600;
 	}
-	.canvas-container {
+	.canvas-row {
+		/* `--hue` is set inline per board (A=blue/230, B=pink/340,
+		   C=amber/45) and read by both the canvas-container chrome and
+		   the mobile page slider's accent-color, so the slider matches
+		   the board it belongs to. */
 		--hue: 220;
+		display: flex;
+		align-items: stretch;
+		gap: 0.45rem;
 		width: 100%;
-		max-width: 520px;
+		justify-content: center;
+	}
+	.page-slider {
+		display: none;
+	}
+	.canvas-container {
+		width: 100%;
+		max-width: 580px;
 		min-width: 240px;
 		aspect-ratio: 1 / 1;
 		border-radius: 14px;
@@ -888,6 +982,75 @@
 			   so the boards card never gets pushed off-screen. */
 			overflow: hidden;
 		}
+
+		/* Mobile-only "1×3 jump table" in each board's header — the
+		   active board's letter remains the heading, the other two
+		   become anchor links to the corresponding boards' wraps. Each
+		   link wears its destination board's hue so users can build a
+		   colour-to-board mental map. */
+		.title-row {
+			display: grid;
+			grid-template-columns: repeat(3, minmax(1.6rem, auto));
+			gap: 1.1rem;
+			justify-content: center;
+			align-items: baseline;
+		}
+		.title.other {
+			display: inline-block;
+			font-size: 1.05rem;
+			font-weight: 600;
+			letter-spacing: 0.06em;
+			opacity: 0.55;
+			text-align: center;
+			text-decoration: underline;
+			text-decoration-thickness: 1px;
+			text-underline-offset: 4px;
+			cursor: pointer;
+			transition:
+				opacity 120ms ease,
+				text-decoration-thickness 120ms ease;
+		}
+		.title.other:hover,
+		.title.other:focus-visible {
+			opacity: 1;
+			text-decoration-thickness: 2px;
+		}
+		.title.other:focus-visible {
+			outline: 2px solid currentColor;
+			outline-offset: 4px;
+			border-radius: 4px;
+		}
+
+		.page-slider {
+			display: block;
+			margin: 0;
+			padding: 0;
+			width: 28px;
+			/* Stretch to the canvas height. The row is `align-items:
+			   stretch`, but a vertical <input> still needs an explicit
+			   height: 100% in some engines for the track to fill. */
+			align-self: stretch;
+			height: auto;
+			/* Standards-track vertical orientation. Most modern engines
+			   (Chromium ≥111, Firefox, Safari ≥17.4) honour this;
+			   `appearance: slider-vertical` is the legacy WebKit
+			   fallback for older Safari/iOS. */
+			writing-mode: vertical-lr;
+			-webkit-appearance: slider-vertical;
+			appearance: slider-vertical;
+			accent-color: oklch(0.7 0.18 var(--hue));
+			/* Prevent the page from scrolling while the user drags the
+			   slider thumb on a touchscreen. */
+			touch-action: none;
+			cursor: ns-resize;
+			background: transparent;
+		}
+		.page-slider:focus-visible {
+			outline: 2px solid oklch(0.7 0.18 var(--hue));
+			outline-offset: 2px;
+			border-radius: 4px;
+		}
+
 		/* The canvas element starts at the HTML5 default 300×150 before
 		   our onMount resize() runs. On a narrow viewport that default
 		   would temporarily exceed its parent and inflate the grid

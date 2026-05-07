@@ -26,12 +26,15 @@
 		return Number.isFinite(s) ? fmtScore.format(s) : '—';
 	}
 
-	// Author display gets a small accent color so the two famous "players"
-	// are visually distinct. Strassen = blue (theory), AlphaTensor = green (AI).
+	// Author display gets a small accent color so the famous "players" are
+	// visually distinct. Strassen = blue (theory), AlphaTensor = green (AI),
+	// and the hand-curated classical results get warm tones (orange for
+	// Laderman, with room to grow as more famous decompositions are added).
 	function authorClass(author: string): string {
 		if (author === 'Strassen') return 'a-strassen';
 		if (author === 'AlphaTensor') return 'a-alphatensor';
-		return '';
+		if (author === 'Laderman') return 'a-laderman';
+		return 'a-classical';
 	}
 
 	// === Live leaderboard ===================================================
@@ -155,6 +158,7 @@
 			<table>
 				<thead>
 					<tr>
+						<th class="actions"></th>
 						<th class="rank-col">#</th>
 						<th class="player">Player</th>
 						<th class="date">When</th>
@@ -170,22 +174,11 @@
 						</th>
 						<th class="score">Score</th>
 						<th class="solved" title="The submitted boards drove the residual to zero.">✓</th>
-						<th class="actions"></th>
 					</tr>
 				</thead>
 				<tbody>
 					{#each entries as e, i (e.id)}
 						<tr class:top={i === 0}>
-							<td class="rank-col">{i + 1}</td>
-							<td class="player">
-								<span class="username">{e.username}</span>
-							</td>
-							<td class="date">{formatDate(e.submittedAt)}</td>
-							<td class="dims">⟨{e.m},{e.n},{e.p}⟩</td>
-							<td class="reff">{e.Reff}</td>
-							<td class="omega">{e.omega.toFixed(3)}</td>
-							<td class="score">{formatScore(e.score)}</td>
-							<td class="solved">{e.solved ? '★' : ''}</td>
 							<td class="actions">
 								<button
 									type="button"
@@ -197,6 +190,16 @@
 									{playingId === e.id ? '…' : 'Play →'}
 								</button>
 							</td>
+							<td class="rank-col">{i + 1}</td>
+							<td class="player">
+								<span class="username">{e.username}</span>
+							</td>
+							<td class="date">{formatDate(e.submittedAt)}</td>
+							<td class="dims">⟨{e.m},{e.n},{e.p}⟩</td>
+							<td class="reff">{e.Reff}</td>
+							<td class="omega">{e.omega.toFixed(3)}</td>
+							<td class="score">{formatScore(e.score)}</td>
+							<td class="solved">{e.solved ? '★' : ''}</td>
 						</tr>
 					{/each}
 				</tbody>
@@ -230,6 +233,7 @@
 		<table>
 			<thead>
 				<tr>
+					<th class="actions"></th>
 					<th class="player">Author</th>
 					<th class="year">Year</th>
 					<th class="dims">⟨m,n,p⟩</th>
@@ -242,12 +246,21 @@
 						ω
 					</th>
 					<th class="score">Score</th>
-					<th class="actions"></th>
 				</tr>
 			</thead>
 			<tbody>
 				{#each HIGH_SCORES as entry, i (entry.author + ':' + entry.m + ',' + entry.n + ',' + entry.p)}
 					<tr class:top={i === 0}>
+						<td class="actions">
+							<button
+								type="button"
+								class="play"
+								onclick={() => onPlay(entry)}
+								title={`Open ⟨${entry.m},${entry.n},${entry.p}⟩ R=${entry.R} (${entry.author}, ${entry.year}) in a new puzzle tab`}
+							>
+								Play →
+							</button>
+						</td>
 						<td class="player">
 							<a
 								class="author {authorClass(entry.author)}"
@@ -265,16 +278,6 @@
 						<td class="naive">{entry.m * entry.n * entry.p}</td>
 						<td class="omega">{entry.omega.toFixed(3)}</td>
 						<td class="score">{formatScore(entry.score)}</td>
-						<td class="actions">
-							<button
-								type="button"
-								class="play"
-								onclick={() => onPlay(entry)}
-								title={`Open ⟨${entry.m},${entry.n},${entry.p}⟩ R=${entry.R} (${entry.author}, ${entry.year}) in a new puzzle tab`}
-							>
-								Play →
-							</button>
-						</td>
 					</tr>
 				{/each}
 			</tbody>
@@ -283,13 +286,17 @@
 
 	<footer class="footnote">
 		<p>
-			AlphaTensor entries are extracted from
+			Classical entries (Strassen, Laderman) are hand-encoded from the original papers; each
+			factorization is verified at module load against the matmul tensor, so a typo would fail
+			loudly instead of silently mis-scoring. AlphaTensor entries are extracted from
 			<a href="https://github.com/deepmind/alphatensor" target="_blank" rel="noopener noreferrer"
 				>DeepMind's official release</a
 			>
 			(<code>factorizations_r.npz</code>, Apache-2.0). Only factorizations whose entries already
-			live in <code>{`{−1, 0, +1}`}</code> can be represented on the player's grid, so larger results
-			from the paper that need ±2 or fractional factors are omitted here.
+			live in <code>{`{−1, 0, +1}`}</code> can be represented on the player's grid, so larger
+			results that need ±2 or fractional factors (and characteristic-2-only schemes such as
+			Kauers–Moosbauer's 95-multiplication
+			<code>⟨5,5,5⟩</code>) are omitted here.
 		</p>
 	</footer>
 </section>
@@ -467,7 +474,7 @@
 		min-width: 9em;
 	}
 	.actions {
-		text-align: right;
+		text-align: left;
 		width: 1%;
 	}
 
@@ -515,6 +522,12 @@
 	}
 	.author.a-alphatensor {
 		color: oklch(0.82 0.18 145);
+	}
+	.author.a-laderman {
+		color: oklch(0.82 0.15 65);
+	}
+	.author.a-classical {
+		color: oklch(0.82 0.12 35);
 	}
 
 	.naive {

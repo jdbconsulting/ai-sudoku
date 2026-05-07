@@ -6,6 +6,7 @@
 	import SolutionDialog from './SolutionDialog.svelte';
 	import SubmitScoreDialog from './SubmitScoreDialog.svelte';
 	import type { GameState } from './state.svelte';
+	import { logGameStarted } from './analytics';
 
 	type Props = { game: GameState };
 	let { game }: Props = $props();
@@ -36,7 +37,13 @@
 		mInput = m;
 		nInput = n;
 		pInput = p;
+		// Skip the telemetry beacon when the dimensions haven't actually
+		// changed — `resize` still rebuilds the boards, but a no-op
+		// "Apply size" click isn't a meaningful "started a new game"
+		// event and would just add noise to the analytics.
+		const dimensionsChanged = m !== game.m || n !== game.n || p !== game.p;
 		game.resize(m, n, p);
+		if (dimensionsChanged) logGameStarted(m, n, p, 'resize');
 	}
 
 	function clampInt(v: number, lo: number, hi: number): number {
@@ -215,6 +222,22 @@
 <section class="card residual-section">
 	<ResidualGrid {game} />
 </section>
+
+<!-- Mobile-only sticky score bar. Pinned to the bottom of the viewport so
+     the player's score is always visible while they're tapping cells, even
+     on tall pages where the full scoreboard has scrolled offscreen. The
+     full scoreboard above is left untouched — this is just a always-on
+     reminder of the headline number. Display: none on desktop. -->
+<div
+	class="mobile-score-bar"
+	class:solved={game.solved}
+	class:negative={game.score < 0}
+	role="status"
+	aria-live="polite"
+>
+	<span class="label">Score</span>
+	<span class="value">{formatScore(game.score)}</span>
+</div>
 
 <style>
 	.card {
@@ -399,7 +422,11 @@
 	.boards-row {
 		display: grid;
 		grid-template-columns: repeat(3, minmax(0, 1fr));
-		gap: 1.25rem;
+		/* Tight gap so the three canvases can grow as large as the row
+		   allows. Combined with the higher max-width on .canvas-container
+		   in Board3D.svelte, this lifts the cap that previously kept the
+		   boards small on wide viewports. */
+		gap: 0.6rem;
 		align-items: center;
 		justify-items: center;
 	}
@@ -459,6 +486,13 @@
 		}
 	}
 
+	/* Sticky mobile score bar. Hidden by default; the @media block below
+	   reveals it on phones. Z-index sits above the prize banners (z 50) so
+	   nothing in the page can overlap the score readout. */
+	.mobile-score-bar {
+		display: none;
+	}
+
 	@media (max-width: 540px) {
 		/* Trim card gutters on phones so the square Board3D canvas can use
 		   nearly the full viewport width inside the boards card and the
@@ -466,8 +500,15 @@
 		.card {
 			padding: 0.75rem 0.6rem;
 		}
+		/* The residual panel inside ResidualGrid.svelte is `position:
+		   fixed` on mobile, pinned just above the mobile score bar.
+		   That takes its `.wrap` out of normal flow, leaving the
+		   surrounding `.residual-section` card as an empty box. Drop
+		   it from layout entirely with `display: contents` so it
+		   neither renders chrome nor consumes a flex slot/gap in
+		   `.page`. */
 		.residual-section {
-			padding: 0.6rem;
+			display: contents;
 		}
 		/* On phones the single-column rule above used `1fr` (not
 		   `minmax(0, 1fr)`), so an intrinsically wider child — like the
@@ -477,6 +518,46 @@
 		   width allows, matching the desktop rule. */
 		.boards-row {
 			grid-template-columns: minmax(0, 1fr);
+		}
+
+		.mobile-score-bar {
+			display: flex;
+			align-items: baseline;
+			justify-content: space-between;
+			gap: 0.75rem;
+			position: fixed;
+			bottom: 0;
+			left: 0;
+			right: 0;
+			z-index: 60;
+			/* env() handles the home-indicator inset on iOS so the
+			   bar's content isn't tucked under the system gesture
+			   strip; the fallback keeps the same visual padding on
+			   browsers without env() support. */
+			padding: 0.55rem 0.9rem calc(0.55rem + env(safe-area-inset-bottom, 0px));
+			background: oklch(0.14 0.02 240 / 0.92);
+			border-top: 1px solid rgb(51 65 85);
+			box-shadow: 0 -6px 18px rgba(0, 0, 0, 0.5);
+			backdrop-filter: blur(8px);
+			font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+		}
+		.mobile-score-bar .label {
+			font-size: 0.7rem;
+			text-transform: uppercase;
+			letter-spacing: 0.1em;
+			color: rgb(148 163 184);
+		}
+		.mobile-score-bar .value {
+			font-size: 1.25rem;
+			font-weight: 700;
+			color: oklch(0.85 0.18 50);
+			font-variant-numeric: tabular-nums;
+		}
+		.mobile-score-bar.negative .value {
+			color: oklch(0.7 0.22 25);
+		}
+		.mobile-score-bar.solved .value {
+			color: oklch(0.78 0.2 145);
 		}
 	}
 </style>

@@ -21,7 +21,13 @@ import {
 	sumAbs
 } from './tensor';
 
-import { parseSubmission, ValidationError } from './sanitize';
+import {
+	classifyUserAgent,
+	parseGameStartedEvent,
+	parseSubmission,
+	truncateIp,
+	ValidationError
+} from './sanitize';
 
 const TABLE_NAME = requireEnv('TABLE_NAME');
 
@@ -56,6 +62,14 @@ export const handler = async (
 		// segment so a typo can't cause a wide DDB scan.
 		const idMatch = path.match(/^\/scores\/([0-9a-f-]{36})$/i);
 		if (method === 'GET' && idMatch) return await getScoreById(idMatch[1]);
+
+		// Fire-and-forget usage telemetry. The browser sends one of these
+		// every time the player starts a game (new tab / resize / replay)
+		// so we can answer "which board sizes are people actually trying?"
+		// in CloudWatch later.
+		if (method === 'POST' && path === '/events/game-started') {
+			return await recordGameStarted(event);
+		}
 
 		return json(404, { error: `not found: ${method} ${path}` });
 	} catch (err) {
@@ -273,6 +287,72 @@ async function getScoreById(id: string): Promise<APIGatewayProxyStructuredResult
 		C: decodeBoardToArray(boardC)
 	};
 	return json(200, response);
+}
+
+// Telemetry endpoint. Records *one row per game-start* so we can later
+// see which board sizes / device classes / rough geographies actually
+// engage with the puzzle. The browser fires this with sendBeacon, so:
+//   - The reply body is empty and the status is 204 No Content (sendBeacon
+//     ignores both anyway, but lighter responses keep CloudWatch logs short).
+//   - We never throw the validation error back to the user — analytics
+//     misses are silent. They're already counted as 4xx in CloudWatch
+//     metrics if you ever need to investigate a misbehaving client.
+//   - IP is anonymized to /24 (IPv4) or /48 (IPv6) before storage. The
+//     full IP never lands in DynamoDB or in our logs.
+async function recordGameStarted(
+	event: LambdaFunctionURLEvent
+): Promise<APIGatewayProxyStructuredResultV2> {
+	let parsed;
+	try {
+		parsed = parseGameStartedEvent(parseBody(event));
+	} catch (err) {
+		// Surface validation failures with a 4xx so a buggy client shows up
+		// in metrics, but don't bubble out of the handler — analytics MUST
+		// NOT be able to break the API. The catch in `handler` would do
+		// the same; this is just explicit.
+		if (err instanceof ValidationError) return json(err.statusCode, { error: err.message });
+		throw err;
+	}
+
+	const { m, n, p, source } = parsed;
+	const http = event.requestContext.http;
+	const ipPrefix = truncateIp(http.sourceIp);
+	const userAgent = http.userAgent;
+	const client = classifyUserAgent(userAgent);
+
+	const ts = new Date().toISOString();
+	// `randomUUID()` makes the SK unique even if two requests land in the
+	// same millisecond (sub-ms timestamps in JS aren't dependable).
+	const sk = `${ts}#${randomUUID()}`;
+
+	await ddb.send(
+		new PutCommand({
+			TableName: TABLE_NAME,
+			Item: {
+				// Single partition for all game-start events. Fine at our
+				// traffic; if it ever gets hot, shard by hour bucket and
+				// scatter-gather in the read path.
+				pk: 'event#game-started',
+				sk,
+				ts,
+				source,
+				m,
+				n,
+				p,
+				// Truncated IP. Stored as a string for human-readable
+				// CloudWatch / DDB browsing. Marshalled as undefined
+				// (and so dropped from the item) when the request came
+				// over a transport that didn't surface a sourceIp.
+				ipPrefix,
+				userAgent,
+				clientCategory: client.category,
+				clientBrowser: client.browser,
+				clientOs: client.os
+			}
+		})
+	);
+
+	return { statusCode: 204, headers: {}, body: '' };
 }
 
 // ---------------------------------------------------------------------------

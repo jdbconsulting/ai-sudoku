@@ -12,6 +12,7 @@ import {
 	sumAbs
 } from './tensor';
 import { decodeFactor, findAlphaTensorPreset, type AlphaTensorPreset } from './alphatensor';
+import { buildFactors, findFamousAlgorithm, type FamousAlgorithm } from './famous';
 
 export type CellValue = -1 | 0 | 1;
 export type Board = 'A' | 'B' | 'C';
@@ -142,6 +143,25 @@ export class GameState {
 		this.A.set(a);
 		this.B.set(b);
 		this.C.set(c);
+		this.version++;
+	}
+
+	// Load a hand-curated classical algorithm by id (e.g. "laderman-3x3x3").
+	// Same shape as loadAlphaTensor: resizes the board to the algorithm's
+	// <m,n,p> first, then fills the first R rank slots from the registry.
+	loadFamous(id: string): boolean {
+		const alg = findFamousAlgorithm(id);
+		if (!alg) return false;
+		this.applyFamous(alg);
+		return true;
+	}
+
+	applyFamous(alg: FamousAlgorithm): void {
+		this.resize(alg.m, alg.n, alg.p, { fillNaive: false });
+		const { A, B, C } = buildFactors(alg);
+		this.A.set(A);
+		this.B.set(B);
+		this.C.set(C);
 		this.version++;
 	}
 

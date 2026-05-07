@@ -181,7 +181,11 @@
 		border-radius: 1px;
 	}
 	.r-zero {
-		background: oklch(0.86 0.18 95);
+		/* Same yellow as the empty-cell colour on the active page in the
+		   3D boards. The boards build that colour via THREE.js setHSL() in
+		   linear-sRGB space (hue 60°, s≈0.71, l=0.55), which the renderer
+		   then gamma-encodes to roughly sRGB #f0f084 — i.e. oklch ≈ this. */
+		background: oklch(0.93 0.13 108);
 	}
 	.r-pos1 {
 		background: oklch(0.7 0.18 145);
@@ -226,5 +230,74 @@
 	}
 	.legend .r-negN {
 		box-shadow: inset 0 0 0 1px oklch(0.95 0.18 25);
+	}
+
+	@media (max-width: 540px) {
+		/* Pin the entire residual panel (header + matrix + legend) to
+		   the bottom of the viewport, stacked just above the fixed
+		   mobile score bar in Game.svelte. The score bar's effective
+		   height is ≈ 2.85rem (0.55rem padding × 2 + ≈1.75rem for the
+		   1.25rem value glyph at line-height 1.4) plus any iOS
+		   home-indicator inset. We bake that offset into the `bottom`
+		   here so the residual always sits flush above the score
+		   readout regardless of how far the page has scrolled. z-index
+		   59 keeps the panel above page content but below the score
+		   bar (z 60), so any half-pixel rounding overlap resolves with
+		   the score on top.
+
+		   `max-height` caps the panel to 40dvh of the viewport; if the
+		   matrix is taller than that on big games (e.g. ⟨5,5,5⟩ →
+		   25×25 cells), the .outer grid scrolls internally instead of
+		   pushing the legend off the screen. */
+		.wrap {
+			position: fixed;
+			left: 0;
+			right: 0;
+			bottom: calc(2.85rem + env(safe-area-inset-bottom, 0px));
+			z-index: 59;
+			width: 100%;
+			max-width: none;
+			max-height: 40dvh;
+			padding: 0.5rem 0.6rem;
+			gap: 0.35rem;
+			border: 0;
+			border-top: 1px solid rgb(51 65 85);
+			border-bottom: 1px solid rgb(51 65 85);
+			border-radius: 0;
+			background: oklch(0.14 0.02 240 / 0.92);
+			backdrop-filter: blur(8px);
+			box-shadow: 0 -6px 18px rgba(0, 0, 0, 0.45);
+		}
+		/* Compact the header: shrink the title and drop the long
+		   explanatory hint so all the available height goes to the
+		   matrix itself. */
+		h2 {
+			font-size: 0.85rem;
+		}
+		.hint {
+			display: none;
+		}
+		/* Let the matrix consume the remaining vertical space and
+		   scroll internally when the rendered grid is larger than
+		   what fits. `min-height: 0` is required so a flex child
+		   with `overflow: auto` actually shrinks below its content
+		   size; without it, browsers refuse to clip and the panel
+		   overflows the cap. */
+		.outer {
+			flex: 1 1 auto;
+			min-height: 0;
+			max-width: 100%;
+		}
+		.legend {
+			padding-top: 0.35rem;
+			margin-top: 0;
+			gap: 0.2rem 0.7rem;
+			font-size: 0.65rem;
+		}
+		.legend .sw {
+			width: 10px;
+			height: 10px;
+			margin-right: 0.25em;
+		}
 	}
 </style>

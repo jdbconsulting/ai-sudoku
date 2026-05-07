@@ -3,13 +3,19 @@ Transform: AWS::Serverless-2016-10-31
 Description: >-
   AI-Sudoku high-score backend.
 
-  One Lambda Function URL routes both:
-    - POST /scores         submit a board, server recomputes the score
-    - GET  /scores/top     top 100 leaderboard
+  One Lambda Function URL routes:
+    - POST /scores                 submit a board, server recomputes the score
+    - GET  /scores/top             top 100 leaderboard
+    - GET  /scores/{id}            full record (incl. boards) for replay
+    - POST /events/game-started    fire-and-forget telemetry on game start
 
   All scoring math runs server-side: the client's claimed score is never
   read. The Lambda imports the same tensor.ts the frontend uses (bundled
   by esbuild) so player and server agree byte-for-byte.
+
+  Telemetry events live in the same DynamoDB table under a different
+  partition key (pk = "event#game-started"). IPs are truncated to a /24
+  (IPv4) or /48 (IPv6) before storage so the table never holds raw PII.
 
 Parameters:
   StageName:

@@ -6,6 +6,7 @@
 
 import type { GameState } from './state.svelte';
 import { ALPHATENSOR_PRESETS } from './alphatensor';
+import { FAMOUS_ALGORITHMS } from './famous';
 import { computeOmega, computeScore } from './tensor';
 
 export type HighScore = {
@@ -66,13 +67,32 @@ const ALPHATENSOR: HighScore[] = ALPHATENSOR_PRESETS.map((at) => ({
 	}
 }));
 
+// Hand-curated classical algorithms from famous.ts. Each registry entry
+// already carries author/year/source metadata and a verified factorization,
+// so the mapping to a HighScore row is mechanical.
+const FAMOUS: HighScore[] = FAMOUS_ALGORITHMS.map((alg) => ({
+	author: alg.author,
+	year: alg.year,
+	sourceUrl: alg.sourceUrl,
+	m: alg.m,
+	n: alg.n,
+	p: alg.p,
+	R: alg.R,
+	...rate(alg.m, alg.n, alg.p, alg.R),
+	apply: (g) => {
+		g.loadFamous(alg.id);
+	}
+}));
+
 // Sort by score descending so the leaderboard reads like a real high
 // score table — best at the top. The displayed score is rounded, so a
 // few entries inevitably tie (e.g. Strassen <2,2,2> R=7 and AlphaTensor
 // <4,4,4> R=49 are both ω≈2.807 since 49 = 7²); fall back to the raw
 // ω, then to m·n·p, to keep the ordering meaningful and deterministic.
-export const HIGH_SCORES: ReadonlyArray<HighScore> = [STRASSEN, ...ALPHATENSOR].sort((a, b) => {
-	if (a.score !== b.score) return b.score - a.score;
-	if (a.omega !== b.omega) return a.omega - b.omega;
-	return a.m * a.n * a.p - b.m * b.n * b.p;
-});
+export const HIGH_SCORES: ReadonlyArray<HighScore> = [STRASSEN, ...FAMOUS, ...ALPHATENSOR].sort(
+	(a, b) => {
+		if (a.score !== b.score) return b.score - a.score;
+		if (a.omega !== b.omega) return a.omega - b.omega;
+		return a.m * a.n * a.p - b.m * b.n * b.p;
+	}
+);
