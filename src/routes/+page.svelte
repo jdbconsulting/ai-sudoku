@@ -147,13 +147,13 @@
 </svelte:head>
 
 <div class="prize-stack" role="status" aria-label="Prize announcements">
-	<div class="prize-banner gold" title="First player to score 100 or higher wins US$10,000">
+	<div class="prize-banner gold" title="First player to score 1,000 or higher wins US$10,000">
 		<span class="prize-amount">US$10,000</span>
-		<span class="prize-text">prize for the first score of 100 or higher!</span>
+		<span class="prize-text">prize for the first score of 1,000 or higher!</span>
 	</div>
-	<div class="prize-banner silver" title="First player to score 50 or higher wins US$1,000">
+	<div class="prize-banner silver" title="First player to score 100 or higher wins US$1,000">
 		<span class="prize-amount">US$1,000</span>
-		<span class="prize-text">prize for the first score of 50 or higher!</span>
+		<span class="prize-text">prize for the first score of 100 or higher!</span>
 	</div>
 </div>
 
