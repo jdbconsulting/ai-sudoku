@@ -43,13 +43,17 @@
 	});
 
 	// Cell pixel size scales down for big layouts. Outer matrix is m × p,
-	// inner is m × p, so total span is (m·m) × (p·p) cells.
+	// inner is m × p, so total span is (m·m) × (p·p) cells. The ladder
+	// is tuned to keep the rendered matrix readable on desktop while
+	// fitting inside the bottom-pinned residual panel on mobile (capped
+	// at 44dvh in the media query below); keep these two numbers in
+	// sync if either is retuned.
 	let cellPx = $derived.by(() => {
 		const maxDim = Math.max(m * m, p * p);
-		if (maxDim <= 8) return 26;
-		if (maxDim <= 16) return 18;
-		if (maxDim <= 32) return 12;
-		if (maxDim <= 64) return 8;
+		if (maxDim <= 8) return 24;
+		if (maxDim <= 16) return 16;
+		if (maxDim <= 32) return 11;
+		if (maxDim <= 64) return 7;
 		return 4;
 	});
 
@@ -245,7 +249,7 @@
 		   bar (z 60), so any half-pixel rounding overlap resolves with
 		   the score on top.
 
-		   `max-height` caps the panel to 48dvh of the viewport; if the
+		   `max-height` caps the panel to 44dvh of the viewport; if the
 		   matrix is taller than that on big games (e.g. ⟨5,5,5⟩ →
 		   25×25 cells), the .outer grid scrolls internally instead of
 		   pushing the legend off the screen. */
@@ -257,7 +261,7 @@
 			z-index: 59;
 			width: 100%;
 			max-width: none;
-			max-height: 48dvh;
+			max-height: 44dvh;
 			padding: 0.5rem 0.6rem;
 			gap: 0.35rem;
 			border: 0;

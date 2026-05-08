@@ -487,12 +487,12 @@
 		   safeguard so any stray child overflow (e.g. a momentarily
 		   oversized canvas) never produces a horizontal scrollbar.
 		   The bottom padding clears the *two* stacked fixed bars on
-		   game tabs — the full residual panel (capped at 48dvh in
+		   game tabs — the full residual panel (capped at 44dvh in
 		   ResidualGrid.svelte) sitting on top of the mobile score bar
 		   (≈3rem) — plus the iOS home-indicator inset, so the footer
 		   never disappears under either. */
 		.page {
-			padding: 0.6rem 0.6rem calc(48dvh + 3rem + env(safe-area-inset-bottom, 0px));
+			padding: 0.6rem 0.6rem calc(44dvh + 3rem + env(safe-area-inset-bottom, 0px));
 			gap: 1rem;
 			overflow-x: clip;
 		}
