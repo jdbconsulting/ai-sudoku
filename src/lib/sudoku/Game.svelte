@@ -145,26 +145,6 @@
 <SolutionDialog {game} bind:open={dialogOpen} mode={dialogMode} />
 <SubmitScoreDialog {game} bind:open={submitDialogOpen} />
 
-<div class="view-controls">
-	<label class="spacing-ctrl">
-		<span>Page spacing</span>
-		<input type="range" min="0.04" max="1.4" step="0.01" bind:value={game.tightGap} />
-		<output>{game.tightGap.toFixed(2)}</output>
-	</label>
-	<label class="spacing-ctrl">
-		<span>Clearance</span>
-		<input
-			type="range"
-			min="0.2"
-			max="10"
-			step="0.05"
-			bind:value={game.clearance}
-			title="Symmetric gap carved out in front of and behind the active page"
-		/>
-		<output>{game.clearance.toFixed(2)}</output>
-	</label>
-</div>
-
 <section class="scoreboard card">
 	<div class="metric" class:solved={game.solved}>
 		<span class="label">Residual non-zeros</span>
@@ -429,37 +409,6 @@
 		gap: 0.6rem;
 		align-items: center;
 		justify-items: center;
-	}
-	.view-controls {
-		display: flex;
-		flex-wrap: wrap;
-		justify-content: center;
-		align-items: center;
-		gap: 0.5rem 1.5rem;
-		margin: 0;
-	}
-	.spacing-ctrl {
-		display: inline-flex;
-		align-items: center;
-		gap: 0.6rem;
-		font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-		font-size: 0.78rem;
-		color: rgb(148 163 184);
-	}
-	.spacing-ctrl span {
-		text-transform: uppercase;
-		letter-spacing: 0.08em;
-		min-width: 7em;
-		text-align: right;
-	}
-	.spacing-ctrl input[type='range'] {
-		accent-color: oklch(0.7 0.18 230);
-		width: 200px;
-	}
-	.spacing-ctrl output {
-		min-width: 2.4em;
-		text-align: right;
-		color: rgb(226 232 240);
 	}
 	.board-placeholder {
 		width: 360px;

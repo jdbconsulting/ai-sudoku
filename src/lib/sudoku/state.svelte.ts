@@ -37,13 +37,11 @@ export class GameState {
 	version = $state(0);
 	T: Int8Array = new Int8Array(0);
 
-	// Shared 3D viewing controls so all three boards stay visually consistent.
-	// `tightGap` is the spacing between consecutive non-active pages.
-	// `clearance` is the symmetric gap carved out in front of and behind the
-	// active page, so the focused page is always isolated from its neighbours
-	// regardless of how tight the rest of the stack is packed.
-	tightGap = $state(0.32);
-	clearance = $state(5);
+	// Per-board 3D viewing controls (page spacing & active-page clearance)
+	// now live as local $state inside each Board3D component, so each
+	// board can be tuned independently without dragging the other two
+	// along. Nothing on the game-mechanics side reads those values, so
+	// they don't belong here on GameState.
 
 	constructor(m = 2, n = 2, p = 2) {
 		this.resize(m, n, p);

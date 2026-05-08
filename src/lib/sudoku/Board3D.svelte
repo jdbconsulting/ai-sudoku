@@ -25,6 +25,39 @@
 		el?.scrollIntoView({ behavior: 'smooth', block: 'start' });
 	}
 
+	// === Per-board 3D layout knobs ==========================================
+	// `tightGap` is the spacing between consecutive non-active pages.
+	// `clearance` is the symmetric gap carved out in front of and behind
+	// the active page, so the focused page is always isolated from its
+	// neighbours regardless of how tight the rest of the stack is packed.
+	// These used to be shared across all three boards via GameState; they
+	// now live per-Board3D so each board's stack can be tuned alone via
+	// the horizontal sliders above and below its canvas.
+	const DEFAULT_TIGHT_GAP = 0.32;
+	const DEFAULT_CLEARANCE = 5;
+	let tightGap = $state(DEFAULT_TIGHT_GAP);
+	let clearance = $state(DEFAULT_CLEARANCE);
+
+	// === Zoom ===============================================================
+	// User-controlled camera distance, written by the right-hand vertical
+	// slider on each board. Range is 0–100 with 50 reproducing the
+	// auto-fit distance computed by fitCameraToStack(); we map the slider
+	// log-linearly so each 25-unit step doubles or halves the factor.
+	//   slider 0   → factor 0.25× (closest, biggest active page)
+	//   slider 50  → factor 1.00× (default auto-fit)
+	//   slider 100 → factor 4.00× (farthest, whole stack visible)
+	let zoom = $state(50);
+
+	function zoomFactor(z: number): number {
+		return Math.pow(2, (z - 50) / 25);
+	}
+
+	function applyZoom() {
+		if (!camera) return;
+		camera.position.z = baseDist * zoomFactor(zoom);
+		camera.updateProjectionMatrix();
+	}
+
 	// === Reactive views into game state =====================================
 
 	let R = $derived(game.R);
@@ -48,8 +81,8 @@
 	const PAGE_PAD = 0.4;
 
 	// Inter-page Z spacing: the active page is always split out with a
-	// `game.clearance` gap on both sides so it stays visible even when the
-	// consecutive page spacing (`game.tightGap`) is packed very tight.
+	// `clearance` gap on both sides so it stays visible even when the
+	// consecutive page spacing (`tightGap`) is packed very tight.
 
 
 	// === Three.js handles ===================================================
@@ -215,8 +248,8 @@
 	function relayoutPagesZ() {
 		if (!pageGroups.length) return;
 		const ap = activePage;
-		const tg = game.tightGap;
-		const cl = game.clearance;
+		const tg = tightGap;
+		const cl = clearance;
 		for (let r = 0; r < pageGroups.length; r++) {
 			pageGroups[r].position.z = pageZForActive(r, ap, tg, cl);
 		}
@@ -238,7 +271,7 @@
 
 		for (let r = 0; r < Rv; r++) {
 			const pg = new THREE.Group();
-			pg.position.z = pageZForActive(r, activePage, game.tightGap, game.clearance);
+			pg.position.z = pageZForActive(r, activePage, tightGap, clearance);
 
 			// Very faint page fill — defines each page as one coherent surface
 			// so the stack doesn't read as 7 disjoint borders. Stays low enough
@@ -342,8 +375,8 @@
 		// m·n·p grows as O(N³) for ⟨N,N,N⟩, and including depth in the fit
 		// would shrink each cell on the active page to the third power of
 		// the board size.
-		const tg = game.tightGap;
-		const cl = game.clearance;
+		const tg = tightGap;
+		const cl = clearance;
 		const interiorTight = Math.max(0, Rv - 3) * tg;
 		const stackD =
 			Rv <= 1
@@ -367,9 +400,13 @@
 
 		baseDist = d;
 		camera.near = 0.1;
+		// Far plane is sized for the worst-case zoom-out (factor 4×) at
+		// the back-most page, so the renderer never culls a page even
+		// when the user drags the zoom slider all the way down.
 		camera.far = d * 4 + stackD * 2 + 30;
-		camera.position.set(0, 0, d);
-		camera.updateProjectionMatrix();
+		camera.position.x = 0;
+		camera.position.y = 0;
+		applyZoom();
 	}
 
 	function refreshAllCells() {
@@ -507,15 +544,42 @@
 	}
 
 	// === Rotation drag + momentum ===========================================
-	// Default orientation is an isometric-style view from above: the top of
-	// each page tilts toward the camera (positive X rotation) so we look
-	// down on the stack, and a complementary Y rotation reveals the depth
-	// of the rank-page stack at roughly a 30°/30° isometric angle.
-	const DEFAULT_ROT_X = Math.PI / 6;
-	const DEFAULT_ROT_Y = -Math.PI / 6;
-	let userRotX = $state(DEFAULT_ROT_X);
-	let userRotY = $state(DEFAULT_ROT_Y);
-	let userRotZ = $state(0);
+	// Orientation is stored as a unit quaternion so the user can spin the
+	// stack freely in any direction without hitting a pole — the previous
+	// Euler-based scheme clamped the X axis just shy of ±π/2 to avoid
+	// gimbal lock, which meant horizontal flicks could "spin over the
+	// top" but vertical flicks could not. The quaternion approach also
+	// makes rotations compose correctly under pre-multiplication, so a
+	// drag in any screen direction always rotates around an axis lying
+	// in the screen plane (true trackball/arcball feel) regardless of
+	// how the stack is currently oriented.
+	//
+	// The default orientation is an isometric-style view from above: the
+	// top of each page tilts toward the camera and a complementary yaw
+	// reveals the depth of the rank-page stack at roughly 30°/30°. We
+	// build the default quaternion from that exact Euler triple so the
+	// initial framing is identical to the old implementation.
+	const DEFAULT_QUAT = new THREE.Quaternion().setFromEuler(
+		new THREE.Euler(Math.PI / 6, -Math.PI / 6, 0, 'XYZ')
+	);
+	// userQuat is mutated in place each frame by both the drag handler
+	// and the momentum integrator. It is intentionally NOT a $state — the
+	// reactive driver for the reset button is `rotationAtDefault` below,
+	// which we flip whenever the orientation diverges from the default.
+	const userQuat = DEFAULT_QUAT.clone();
+	// Reactive flag: true exactly when no drag/flick has happened since
+	// the last reset. Becomes false on first drag delta or when momentum
+	// is being integrated; flipped back to true by resetView().
+	let rotationAtDefault = $state(true);
+
+	// Pre-allocated scratch objects so the per-frame integrator and the
+	// pointermove handler don't churn the allocator.
+	const _qDelta = new THREE.Quaternion();
+	const _axis = new THREE.Vector3();
+	// Angular velocity stored as ω·axis (rad/sec). Magnitude = angular
+	// speed; direction = axis of rotation in world space. Lives in world
+	// coordinates so flicks always rotate around screen-plane axes.
+	const angVel = new THREE.Vector3();
 
 	let dragging = false;
 	let dragStart = { x: 0, y: 0 };
@@ -532,19 +596,13 @@
 	const VEL_SMOOTH = 0.35; // 0..1, higher = more responsive
 	const RELEASE_GRACE_MS = 90; // mouse must have moved within this window for momentum
 
-	// Active angular momentum (rad/sec). Frictionless: once a flick imparts
-	// momentum, the stack keeps spinning until the user grabs it again
-	// (onPointerDown zeroes both axes) or, on the X axis, until the
-	// rotation clamp is hit.
-	let angVelX = 0;
-	let angVelY = 0;
-
 	export function resetView() {
-		userRotX = DEFAULT_ROT_X;
-		userRotY = DEFAULT_ROT_Y;
-		userRotZ = 0;
-		angVelX = 0;
-		angVelY = 0;
+		userQuat.copy(DEFAULT_QUAT);
+		angVel.set(0, 0, 0);
+		rotationAtDefault = true;
+		zoom = 50;
+		tightGap = DEFAULT_TIGHT_GAP;
+		clearance = DEFAULT_CLEARANCE;
 	}
 
 	// Wheel = page stepper. We accumulate `deltaY` until it crosses a
@@ -579,13 +637,16 @@
 		const idle = now - lastMoveT;
 		if (idle > RELEASE_GRACE_MS) {
 			// Mouse went still before release — no spin.
-			angVelX = 0;
-			angVelY = 0;
+			angVel.set(0, 0, 0);
 			return;
 		}
-		// Convert px/ms → rad/sec via the same sensitivity we use for direct drag.
-		angVelY = velPxX * 1000 * ROT_SENSITIVITY;
-		angVelX = velPxY * 1000 * ROT_SENSITIVITY;
+		// Convert smoothed px/ms → rad/sec around world-space axes that
+		// lie in the screen plane. Horizontal pixel velocity becomes a
+		// yaw around world +Y; vertical pixel velocity becomes a pitch
+		// around world +X. The sensitivity factor matches the direct
+		// drag conversion below so a flick continues seamlessly from
+		// the last drag delta.
+		angVel.set(velPxY * 1000 * ROT_SENSITIVITY, velPxX * 1000 * ROT_SENSITIVITY, 0);
 	}
 
 	function onPointerDown(event: PointerEvent) {
@@ -599,8 +660,7 @@
 		dragLast = { x: event.clientX, y: event.clientY };
 		dragMoved = 0;
 		// Stop any in-progress spin so the drag tracks the cursor 1:1.
-		angVelX = 0;
-		angVelY = 0;
+		angVel.set(0, 0, 0);
 		velPxX = velPxY = 0;
 		lastMoveT = performance.now();
 		canvasEl.setPointerCapture(event.pointerId);
@@ -613,9 +673,33 @@
 			dragLast = { x: event.clientX, y: event.clientY };
 			dragMoved += Math.abs(event.clientX - dragStart.x) + Math.abs(event.clientY - dragStart.y);
 			if (dragMoved > DRAG_THRESHOLD_PX) {
-				userRotY += dx * ROT_SENSITIVITY;
-				userRotX += dy * ROT_SENSITIVITY;
-				userRotX = Math.max(-Math.PI / 2.05, Math.min(Math.PI / 2.05, userRotX));
+				// Trackball rotation. Build a single delta quaternion for
+				// this drag step whose axis lies in the screen plane and
+				// is perpendicular to the drag vector, then *pre-*multiply
+				// it onto userQuat. Pre-multiplying applies the rotation
+				// in world space (around screen-aligned axes) rather than
+				// in the stack's local frame, which is the trick that
+				// lets a horizontal flick keep working even after the
+				// stack has been pitched all the way "over the top".
+				//
+				// Axis derivation: the camera looks down -Z, so screen
+				// +X = world +X and screen +Y = world -Y (because dy in
+				// browser coords grows downward). The drag vector in
+				// world coords is therefore (dx, -dy, 0), and the
+				// trackball axis is +Z × drag = (dy, dx, 0) (un-norm).
+				// For a pure horizontal drag this is +Y (yaw), and for
+				// a pure vertical drag this is +X (pitch) — matching
+				// the direction of the original Euler scheme exactly,
+				// while combinations now sweep a continuous family of
+				// in-screen-plane axes.
+				const lenSq = dx * dx + dy * dy;
+				if (lenSq > 0) {
+					const len = Math.sqrt(lenSq);
+					_axis.set(dy / len, dx / len, 0);
+					_qDelta.setFromAxisAngle(_axis, len * ROT_SENSITIVITY);
+					userQuat.premultiply(_qDelta);
+					rotationAtDefault = false;
+				}
 				canvasEl.style.cursor = 'grabbing';
 				trackVelocity(dx, dy);
 			}
@@ -636,8 +720,7 @@
 		if (dragMoved <= DRAG_THRESHOLD_PX) {
 			// Short press without drag → click action.
 			handleClick(event);
-			angVelX = 0;
-			angVelY = 0;
+			angVel.set(0, 0, 0);
 		} else {
 			commitMomentum();
 		}
@@ -646,8 +729,7 @@
 
 	function onPointerCancel() {
 		dragging = false;
-		angVelX = 0;
-		angVelY = 0;
+		angVel.set(0, 0, 0);
 	}
 
 	function onContextMenu(event: MouseEvent) {
@@ -666,30 +748,23 @@
 		lastFrameT = now;
 
 		// Apply angular momentum every frame. There is no friction — the
-		// stack keeps spinning until the user grabs it again. Y rotation
-		// has no clamp (it wraps freely); X rotation is clamped just shy
-		// of ±π/2 to prevent flipping upside down. When X hits the clamp
-		// we zero its velocity so it doesn't waste compute pressing into
-		// the wall every frame; Y velocity is left intact so a diagonal
-		// flick continues spinning purely horizontally afterwards.
-		if (angVelX !== 0 || angVelY !== 0) {
-			userRotX += angVelX * dt;
-			userRotY += angVelY * dt;
-			const xMin = -Math.PI / 2.05;
-			const xMax = Math.PI / 2.05;
-			if (userRotX <= xMin) {
-				userRotX = xMin;
-				angVelX = 0;
-			} else if (userRotX >= xMax) {
-				userRotX = xMax;
-				angVelX = 0;
-			}
+		// stack keeps spinning until the user grabs it again. With the
+		// quaternion representation there are no clamps on either axis:
+		// vertical flicks can sail "over the top" and horizontal flicks
+		// continue to wrap freely, in any combination. We integrate by
+		// constructing a delta quaternion from the current ω·axis vector
+		// and pre-multiplying it onto the orientation, mirroring the
+		// world-space convention used during direct drag.
+		const speed = angVel.length();
+		if (speed > 0) {
+			_axis.copy(angVel).divideScalar(speed);
+			_qDelta.setFromAxisAngle(_axis, speed * dt);
+			userQuat.premultiply(_qDelta);
+			if (rotationAtDefault) rotationAtDefault = false;
 		}
 
 		if (stackGroup) {
-			stackGroup.rotation.x = userRotX;
-			stackGroup.rotation.y = userRotY;
-			stackGroup.rotation.z = userRotZ;
+			stackGroup.quaternion.copy(userQuat);
 		}
 		if (renderer && scene && camera) renderer.render(scene, camera);
 		frameId = requestAnimationFrame(animate);
@@ -779,21 +854,32 @@
 		});
 	});
 
-	// Sliders in the page header drive consecutive-page spacing and the gap
-	// carved around the active page; both change the worst-case stack depth
-	// so we relayout and refit the camera each time either updates.
+	// The horizontal sliders above and below this board's canvas drive
+	// consecutive-page spacing and the gap carved around the active
+	// page; both change the worst-case stack depth so we relayout and
+	// refit the camera each time either updates.
 	$effect(() => {
-		game.tightGap;
-		game.clearance;
+		tightGap;
+		clearance;
 		untrack(() => {
 			relayoutPagesZ();
 			// Refit so a much wider stack still fits on screen at zoom=1.
 			fitCameraToStack(cachedPageW, cachedPageH, R);
 		});
 	});
+
+	// Drives the camera's z-position from the user's zoom slider.
+	// applyZoom() multiplies baseDist (the auto-fit distance) by the
+	// log-mapped slider factor, so changing the slider is decoupled from
+	// any board-geometry refits — and zoom level is preserved across
+	// resizes, m/n/p changes, and page-spacing slider edits.
+	$effect(() => {
+		zoom;
+		untrack(() => applyZoom());
+	});
 </script>
 
-<div class="board-wrap" id={`board-${board}`}>
+<div class="board-wrap" id={`board-${board}`} style:--hue={hue}>
 	<div class="board-header">
 		<!-- 1×3 navigation row of board labels. The active board's letter
 		     is rendered as the heading; the other two are anchor links
@@ -821,16 +907,33 @@
 			{/each}
 		</div>
 	</div>
-	<div class="canvas-row" style:--hue={hue}>
-		<!-- Mobile-only vertical page picker. Top of the slider = page 0
-		     (closest to the camera), bottom = page R-1 (farthest). Tied
-		     one-way to activePage so external page changes (tab clicks,
-		     wheel, page-spacing slider edits) keep it in sync. Hidden on
-		     desktop, where the on-canvas tabs already work well with a
-		     mouse. -->
+	<!-- Horizontal page-spacing slider, one per board. Drag right to
+	     spread consecutive pages further apart along the camera axis;
+	     drag left to compact them. Width matches the canvas so the
+	     control reads as belonging to its board. The visible text label
+	     is intentionally absent — the slider's position above the
+	     canvas plus the title/aria-label tooltip carry the meaning. -->
+	<label class="h-slider-row">
 		<input
 			type="range"
-			class="page-slider"
+			class="h-slider"
+			min="0.04"
+			max="1.4"
+			step="0.01"
+			bind:value={tightGap}
+			aria-label={`Page spacing for board ${title}`}
+			title={`Page spacing for board ${title} — drag right to spread consecutive pages further apart, left to pack them tighter`}
+		/>
+	</label>
+	<div class="canvas-row">
+		<!-- Vertical page picker. Top of the slider = page 0 (closest to
+		     the camera), bottom = page R-1 (farthest). Tied one-way to
+		     activePage so external page changes (tab clicks, wheel,
+		     page-spacing slider edits) keep it in sync. Available on
+		     both desktop and mobile. -->
+		<input
+			type="range"
+			class="v-slider page-slider"
 			min="0"
 			max={Math.max(0, R - 1)}
 			step="1"
@@ -854,7 +957,7 @@
 				}}
 				aria-label={`Board ${title}, 3D rank-page stack. Active page ${activePage + 1} of ${R}.`}
 			></canvas>
-			{#if userRotX !== DEFAULT_ROT_X || userRotY !== DEFAULT_ROT_Y || userRotZ !== 0}
+			{#if !rotationAtDefault || zoom !== 50 || tightGap !== DEFAULT_TIGHT_GAP || clearance !== DEFAULT_CLEARANCE}
 				<button
 					type="button"
 					class="reset-view"
@@ -865,7 +968,43 @@
 				</button>
 			{/if}
 		</div>
+		<!-- Vertical zoom slider, mirrored on the right of the canvas.
+		     Top = factor 0.25× (zoomed in, biggest active page); middle
+		     = factor 1× (auto-fit, the default); bottom = factor 4×
+		     (zoomed out, all pages visible). Available on both desktop
+		     and mobile. -->
+		<input
+			type="range"
+			class="v-slider zoom-slider"
+			min="0"
+			max="100"
+			step="1"
+			value={zoom}
+			oninput={(e) => (zoom = Number((e.currentTarget as HTMLInputElement).value))}
+			aria-label={`Zoom for board ${title}`}
+			aria-valuetext={`${(zoomFactor(zoom) * 100).toFixed(0)}% of auto-fit distance`}
+			title={`Zoom (${zoomFactor(zoom).toFixed(2)}×; drag up to zoom in, down to zoom out)`}
+		/>
 	</div>
+	<!-- Horizontal active-page-clearance slider, one per board. Drag
+	     right to widen the symmetric gap carved out in front of and
+	     behind the active page (so it stays visible even when the
+	     consecutive-page spacing is packed tight); drag left to close
+	     the gap. Visible text label is intentionally absent — the
+	     slider's position below the canvas plus the title/aria-label
+	     tooltip carry the meaning. -->
+	<label class="h-slider-row">
+		<input
+			type="range"
+			class="h-slider"
+			min="0.2"
+			max="10"
+			step="0.05"
+			bind:value={clearance}
+			aria-label={`Active page clearance for board ${title}`}
+			title={`Active-page clearance for board ${title} — symmetric gap carved out in front of and behind the active page`}
+		/>
+	</label>
 </div>
 
 <style>
@@ -903,7 +1042,7 @@
 	.canvas-row {
 		/* `--hue` is set inline per board (A=blue/230, B=pink/340,
 		   C=amber/45) and read by both the canvas-container chrome and
-		   the mobile page slider's accent-color, so the slider matches
+		   the page/zoom sliders' accent-color, so each slider matches
 		   the board it belongs to. */
 		--hue: 220;
 		display: flex;
@@ -912,8 +1051,70 @@
 		width: 100%;
 		justify-content: center;
 	}
-	.page-slider {
-		display: none;
+	/* Shared vertical slider styling used by both the page-picker on
+	   the left and the zoom slider on the right. Visible at every
+	   viewport size — desktop and mobile both. */
+	.v-slider {
+		display: block;
+		margin: 0;
+		padding: 0;
+		width: 28px;
+		/* Stretch to the canvas height. The row is `align-items:
+		   stretch`, but a vertical <input> still needs an explicit
+		   height: 100% in some engines for the track to fill. */
+		align-self: stretch;
+		height: auto;
+		/* Standards-track vertical orientation. Most modern engines
+		   (Chromium ≥111, Firefox, Safari ≥17.4) honour this;
+		   `appearance: slider-vertical` is the legacy WebKit fallback
+		   for older Safari/iOS. */
+		writing-mode: vertical-lr;
+		-webkit-appearance: slider-vertical;
+		appearance: slider-vertical;
+		accent-color: oklch(0.7 0.18 var(--hue));
+		/* Prevent the page from scrolling while the user drags the
+		   slider thumb on a touchscreen. */
+		touch-action: none;
+		cursor: ns-resize;
+		background: transparent;
+	}
+	.v-slider:focus-visible {
+		outline: 2px solid oklch(0.7 0.18 var(--hue));
+		outline-offset: 2px;
+		border-radius: 4px;
+	}
+
+	/* Horizontal "Page spacing" / "Clearance" sliders that sit above
+	   and below this board's canvas. Width is sized to match the
+	   canvas — the canvas-row reserves 2 × (28px slider + 0.45rem gap)
+	   for the vertical sliders, so we subtract the same here. The
+	   max-width caps the slider once the canvas itself caps at 580px
+	   on wide viewports, keeping the two visually flush even when the
+	   board-wrap is wider than the active canvas+sliders block. */
+	.h-slider-row {
+		display: flex;
+		align-items: center;
+		gap: 0.5rem;
+		width: calc(100% - 2 * (28px + 0.45rem));
+		max-width: 580px;
+		font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+		font-size: 0.7rem;
+		color: rgb(148 163 184);
+	}
+	.h-slider {
+		flex: 1 1 auto;
+		min-width: 0;
+		accent-color: oklch(0.7 0.18 var(--hue));
+		cursor: ew-resize;
+		/* Allow vertical page scrolling on touch even if the user's
+		   finger lands on the slider track — only horizontal drags
+		   should be captured by the input. */
+		touch-action: pan-y;
+	}
+	.h-slider:focus-visible {
+		outline: 2px solid oklch(0.7 0.18 var(--hue));
+		outline-offset: 2px;
+		border-radius: 4px;
 	}
 	.canvas-container {
 		width: 100%;
@@ -1006,36 +1207,6 @@
 		.title.other:focus-visible {
 			outline: 2px solid currentColor;
 			outline-offset: 4px;
-			border-radius: 4px;
-		}
-
-		.page-slider {
-			display: block;
-			margin: 0;
-			padding: 0;
-			width: 28px;
-			/* Stretch to the canvas height. The row is `align-items:
-			   stretch`, but a vertical <input> still needs an explicit
-			   height: 100% in some engines for the track to fill. */
-			align-self: stretch;
-			height: auto;
-			/* Standards-track vertical orientation. Most modern engines
-			   (Chromium ≥111, Firefox, Safari ≥17.4) honour this;
-			   `appearance: slider-vertical` is the legacy WebKit
-			   fallback for older Safari/iOS. */
-			writing-mode: vertical-lr;
-			-webkit-appearance: slider-vertical;
-			appearance: slider-vertical;
-			accent-color: oklch(0.7 0.18 var(--hue));
-			/* Prevent the page from scrolling while the user drags the
-			   slider thumb on a touchscreen. */
-			touch-action: none;
-			cursor: ns-resize;
-			background: transparent;
-		}
-		.page-slider:focus-visible {
-			outline: 2px solid oklch(0.7 0.18 var(--hue));
-			outline-offset: 2px;
 			border-radius: 4px;
 		}
 

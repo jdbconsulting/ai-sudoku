@@ -245,7 +245,7 @@
 		   bar (z 60), so any half-pixel rounding overlap resolves with
 		   the score on top.
 
-		   `max-height` caps the panel to 40dvh of the viewport; if the
+		   `max-height` caps the panel to 48dvh of the viewport; if the
 		   matrix is taller than that on big games (e.g. ⟨5,5,5⟩ →
 		   25×25 cells), the .outer grid scrolls internally instead of
 		   pushing the legend off the screen. */
@@ -257,7 +257,7 @@
 			z-index: 59;
 			width: 100%;
 			max-width: none;
-			max-height: 40dvh;
+			max-height: 48dvh;
 			padding: 0.5rem 0.6rem;
 			gap: 0.35rem;
 			border: 0;

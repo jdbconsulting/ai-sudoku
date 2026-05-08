@@ -158,11 +158,11 @@
 <div class="prize-stack" role="status" aria-label="Prize announcements">
 	<div class="prize-banner gold" title="First player to score 1,000 or higher wins US$10,000">
 		<span class="prize-amount">US$10,000</span>
-		<span class="prize-text">prize for the first score of 1,000 or higher!</span>
+		<span class="prize-text">prize for first score &gt;1,000 (ω &lt; 2.5)!</span>
 	</div>
 	<div class="prize-banner silver" title="First player to score 100 or higher wins US$1,000">
 		<span class="prize-amount">US$1,000</span>
-		<span class="prize-text">prize for the first score of 100 or higher!</span>
+		<span class="prize-text">prize for first score &gt;100 (ω &lt; 2.7168)!</span>
 	</div>
 </div>
 
@@ -201,7 +201,7 @@
 		<div class="help-dialog-inner">
 			<h2 id="help-title">How to play</h2>
 			<p class="tagline">
-				Help make AI faster by inventing a new algorithm! When you play this game and achieve a new
+				Help make AI better by inventing a new algorithm! When you play this game and achieve a new
 				high score, you have discovered a new algorithm that will directly improve the performance
 				of AI. Each puzzle gives you three small grids —
 				<code>A</code>, <code>B</code>, and <code>C</code> — whose cells you set to
@@ -487,12 +487,12 @@
 		   safeguard so any stray child overflow (e.g. a momentarily
 		   oversized canvas) never produces a horizontal scrollbar.
 		   The bottom padding clears the *two* stacked fixed bars on
-		   game tabs — the full residual panel (capped at 40dvh in
+		   game tabs — the full residual panel (capped at 48dvh in
 		   ResidualGrid.svelte) sitting on top of the mobile score bar
 		   (≈3rem) — plus the iOS home-indicator inset, so the footer
 		   never disappears under either. */
 		.page {
-			padding: 0.6rem 0.6rem calc(40dvh + 3rem + env(safe-area-inset-bottom, 0px));
+			padding: 0.6rem 0.6rem calc(48dvh + 3rem + env(safe-area-inset-bottom, 0px));
 			gap: 1rem;
 			overflow-x: clip;
 		}
