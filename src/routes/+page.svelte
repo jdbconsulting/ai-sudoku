@@ -265,14 +265,26 @@
 				<tbody>
 					<tr>
 						<td><code>⟨2,2,2⟩</code></td>
-						<td><code>R ≤ 6</code></td>
-						<td><code>R ≤ 5</code></td>
+						<td>
+							<code>R ≤ 6</code>
+							<div class="impossible">(proven impossible)</div>
+						</td>
+						<td>
+							<code>R ≤ 5</code>
+							<div class="impossible">(proven impossible)</div>
+						</td>
 						<td>Strassen <code>R = 7</code> (score 14)</td>
 					</tr>
 					<tr>
 						<td><code>⟨3,3,3⟩</code></td>
-						<td><code>R ≤ 18</code></td>
-						<td><code>R ≤ 15</code></td>
+						<td>
+							<code>R ≤ 18</code>
+							<div class="impossible">(proven impossible)</div>
+						</td>
+						<td>
+							<code>R ≤ 15</code>
+							<div class="impossible">(proven impossible)</div>
+						</td>
 						<td>Schoolbook <code>R = 27</code></td>
 					</tr>
 					<tr>
@@ -280,6 +292,12 @@
 						<td><code>R ≤ 40</code></td>
 						<td><code>R ≤ 32</code></td>
 						<td>AlphaTensor <code>R = 49</code> (score 14)</td>
+					</tr>
+					<tr>
+						<td><code>⟨5,5,5⟩</code></td>
+						<td><code>R ≤ 73</code></td>
+						<td><code>R ≤ 55</code></td>
+						<td>Schoolbook <code>R = 125</code></td>
 					</tr>
 				</tbody>
 			</table>
@@ -668,6 +686,15 @@
 	}
 	.help-dialog .prize-table code {
 		color: rgb(125 211 252);
+	}
+	.help-dialog .prize-table .impossible {
+		/* Red, slightly smaller annotation that sits under the rank cell.
+		   Matches the negative-score red used elsewhere (oklch 0.7 0.22 25)
+		   so "proven impossible" reads as a hard-stop signal. */
+		margin-top: 0.15rem;
+		font-size: 0.65rem;
+		color: oklch(0.7 0.22 25);
+		letter-spacing: 0.02em;
 	}
 	@media (max-width: 540px) {
 		.help-dialog .prize-table {
