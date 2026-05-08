@@ -54,7 +54,7 @@
 		const maxDim = Math.max(m * m, p * p);
 		if (maxDim <= 4) return 24;
 		if (maxDim <= 9) return 16;
-		if (maxDim <= 16) return 12;
+		if (maxDim <= 16) return 10;
 		if (maxDim <= 25) return 9;
 		if (maxDim <= 36) return 6;
 		if (maxDim <= 49) return 4;
