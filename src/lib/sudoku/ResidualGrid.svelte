@@ -43,17 +43,22 @@
 	});
 
 	// Cell pixel size scales down for big layouts. Outer matrix is m × p,
-	// inner is m × p, so total span is (m·m) × (p·p) cells. The ladder
-	// is tuned to keep the rendered matrix readable on desktop while
-	// fitting inside the bottom-pinned residual panel on mobile (capped
-	// at 44dvh in the media query below); keep these two numbers in
-	// sync if either is retuned.
+	// inner is m × p, so total span is (m·m) × (p·p) cells. Breakpoints
+	// are perfect squares so the buckets align with whole board side
+	// lengths: ≤4 = ⟨2,2,2⟩-class, ≤9 = ⟨3,3,3⟩, ≤16 = ⟨4,4,4⟩, ≤25 =
+	// ⟨5,5,5⟩, and so on. Tuned to keep the rendered matrix readable
+	// on desktop while still fitting inside the bottom-pinned residual
+	// panel on mobile (capped at 44dvh in the media query below); keep
+	// these two numbers in sync if either is retuned.
 	let cellPx = $derived.by(() => {
 		const maxDim = Math.max(m * m, p * p);
-		if (maxDim <= 8) return 24;
-		if (maxDim <= 16) return 16;
-		if (maxDim <= 32) return 11;
-		if (maxDim <= 64) return 7;
+		if (maxDim <= 4) return 24;
+		if (maxDim <= 9) return 16;
+		if (maxDim <= 16) return 12;
+		if (maxDim <= 25) return 9;
+		if (maxDim <= 36) return 6;
+		if (maxDim <= 49) return 4;
+		if (maxDim <= 64) return 4;
 		return 4;
 	});
 
