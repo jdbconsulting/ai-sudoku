@@ -156,53 +156,53 @@
 	{:else}
 		<div class="table-scroll">
 			<table>
-				<thead>
-					<tr>
-						<th class="actions"></th>
-						<th class="rank-col">#</th>
-						<th class="player">Player</th>
-						<th class="date">When</th>
-						<th class="dims">⟨m,n,p⟩</th>
-						<th class="reff" title="Effective rank: ranks used + L1 patch cost for the residual.">
-							R<sub>eff</sub>
-						</th>
-						<th
-							class="omega"
-							title="Effective asymptotic exponent (lower is better, 2 = ideal, 3 = naive)."
-						>
-							ω
-						</th>
-						<th class="score">Score</th>
-						<th class="solved" title="The submitted boards drove the residual to zero.">✓</th>
+			<thead>
+				<tr>
+					<th class="actions"></th>
+					<th class="rank-col">#</th>
+					<th class="score">Score</th>
+					<th class="player">Player</th>
+					<th class="date">When</th>
+					<th class="dims">⟨m,n,p⟩</th>
+					<th class="reff" title="Effective rank: ranks used + L1 patch cost for the residual.">
+						R<sub>eff</sub>
+					</th>
+					<th
+						class="omega"
+						title="Effective asymptotic exponent (lower is better, 2 = ideal, 3 = naive)."
+					>
+						ω
+					</th>
+					<th class="solved" title="The submitted boards drove the residual to zero.">✓</th>
+				</tr>
+			</thead>
+			<tbody>
+				{#each entries as e, i (e.id)}
+					<tr class:top={i === 0}>
+						<td class="actions">
+							<button
+								type="button"
+								class="play"
+								disabled={playingId !== null}
+								onclick={() => playEntry(e)}
+								title={`Open ${e.username}'s ⟨${e.m},${e.n},${e.p}⟩ submission in a new puzzle tab`}
+							>
+								{playingId === e.id ? '…' : 'Play →'}
+							</button>
+						</td>
+						<td class="rank-col">{i + 1}</td>
+						<td class="score">{formatScore(e.score)}</td>
+						<td class="player">
+							<span class="username">{e.username}</span>
+						</td>
+						<td class="date">{formatDate(e.submittedAt)}</td>
+						<td class="dims">⟨{e.m},{e.n},{e.p}⟩</td>
+						<td class="reff">{e.Reff}</td>
+						<td class="omega">{e.omega.toFixed(3)}</td>
+						<td class="solved">{e.solved ? '★' : ''}</td>
 					</tr>
-				</thead>
-				<tbody>
-					{#each entries as e, i (e.id)}
-						<tr class:top={i === 0}>
-							<td class="actions">
-								<button
-									type="button"
-									class="play"
-									disabled={playingId !== null}
-									onclick={() => playEntry(e)}
-									title={`Open ${e.username}'s ⟨${e.m},${e.n},${e.p}⟩ submission in a new puzzle tab`}
-								>
-									{playingId === e.id ? '…' : 'Play →'}
-								</button>
-							</td>
-							<td class="rank-col">{i + 1}</td>
-							<td class="player">
-								<span class="username">{e.username}</span>
-							</td>
-							<td class="date">{formatDate(e.submittedAt)}</td>
-							<td class="dims">⟨{e.m},{e.n},{e.p}⟩</td>
-							<td class="reff">{e.Reff}</td>
-							<td class="omega">{e.omega.toFixed(3)}</td>
-							<td class="score">{formatScore(e.score)}</td>
-							<td class="solved">{e.solved ? '★' : ''}</td>
-						</tr>
-					{/each}
-				</tbody>
+				{/each}
+			</tbody>
 			</table>
 		</div>
 		{#if playError}
@@ -234,6 +234,7 @@
 			<thead>
 				<tr>
 					<th class="actions"></th>
+					<th class="score">Score</th>
 					<th class="player">Author</th>
 					<th class="year">Year</th>
 					<th class="dims">⟨m,n,p⟩</th>
@@ -245,7 +246,6 @@
 					>
 						ω
 					</th>
-					<th class="score">Score</th>
 				</tr>
 			</thead>
 			<tbody>
@@ -261,6 +261,7 @@
 								Play →
 							</button>
 						</td>
+						<td class="score">{formatScore(entry.score)}</td>
 						<td class="player">
 							<a
 								class="author {authorClass(entry.author)}"
@@ -277,7 +278,6 @@
 						<td class="rank">{entry.R}</td>
 						<td class="naive">{entry.m * entry.n * entry.p}</td>
 						<td class="omega">{entry.omega.toFixed(3)}</td>
-						<td class="score">{formatScore(entry.score)}</td>
 					</tr>
 				{/each}
 			</tbody>
@@ -465,10 +465,21 @@
 	.reff,
 	.naive,
 	.omega,
-	.score,
 	.rank-col,
 	.solved {
 		text-align: right;
+	}
+	.score {
+		text-align: left;
+		/* Collapse to content width. Combined with the inherited
+		   `white-space: nowrap` on tbody cells, `width: 1%` is the
+		   standard CSS trick that tells the table layout algorithm
+		   to give this column as little horizontal space as its
+		   widest cell needs (≈ "1,000,000" at the font size used
+		   here) instead of distributing surplus row width to it. */
+		width: 1%;
+		padding-left: 0.5rem;
+		padding-right: 0.5rem;
 	}
 	.player {
 		min-width: 9em;
