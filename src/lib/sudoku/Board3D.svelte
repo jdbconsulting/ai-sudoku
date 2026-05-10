@@ -967,6 +967,22 @@
 					⟲ Reset view
 				</button>
 			{/if}
+			<!-- Always-visible badge in the bottom-left of the canvas
+			     showing which page (rank-1 outer-product layer) is
+			     currently active in this board's stack. Mirrors the
+			     position and styling of the .reset-view button in the
+			     opposite corner so the two overlays read as a pair.
+			     Pure read-out — page selection happens via the vertical
+			     slider on the left of the canvas, mouse wheel, etc. -->
+			{#if R > 0}
+				<div
+					class="page-indicator"
+					aria-hidden="true"
+					title={`Active page ${activePage + 1} of ${R}`}
+				>
+					{activePage + 1} / {R}
+				</div>
+			{/if}
 		</div>
 		<!-- Vertical zoom slider, mirrored on the right of the canvas.
 		     Top = factor 0.25× (zoomed in, biggest active page); middle
@@ -1156,6 +1172,27 @@
 	.reset-view:hover {
 		background: oklch(0.28 0.05 var(--hue) / 0.9);
 		border-color: oklch(0.6 0.14 var(--hue));
+	}
+	/* Mirror of .reset-view in the opposite corner. Same chrome (size,
+	   font, blurred translucent fill, hue-tinted border) so the two
+	   overlays look like siblings; positioned bottom-left instead of
+	   top-right. Non-interactive — `pointer-events: none` ensures the
+	   badge never steals a click/drag meant for the canvas. */
+	.page-indicator {
+		position: absolute;
+		bottom: 8px;
+		left: 8px;
+		padding: 0.3rem 0.55rem;
+		font-size: 0.72rem;
+		font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+		font-variant-numeric: tabular-nums;
+		background: oklch(0.18 0.03 240 / 0.85);
+		color: rgb(226 232 240);
+		border: 1px solid oklch(0.4 0.06 var(--hue) / 0.6);
+		border-radius: 6px;
+		backdrop-filter: blur(4px);
+		pointer-events: none;
+		user-select: none;
 	}
 
 	@media (max-width: 540px) {
