@@ -1080,13 +1080,17 @@
 		   height: 100% in some engines for the track to fill. */
 		align-self: stretch;
 		height: auto;
-		/* Standards-track vertical orientation. Most modern engines
-		   (Chromium ≥111, Firefox, Safari ≥17.4) honour this;
-		   `appearance: slider-vertical` is the legacy WebKit fallback
-		   for older Safari/iOS. */
+		/* Standards-track vertical orientation. Honoured by Chromium
+		   ≥111, Firefox, and Safari ≥17.4 — i.e. every engine we
+		   actively target. We previously also set the non-standard
+		   `appearance: slider-vertical`, but Chromium has flagged
+		   that keyword for removal (DevTools warns: "the keyword
+		   'slider-vertical' specified to an 'appearance' property
+		   is not standardized") so it's now omitted. The slider's
+		   value-axis runs from min (top) to max (bottom), which
+		   matches the per-slider top/bottom comments in the markup
+		   above. */
 		writing-mode: vertical-lr;
-		-webkit-appearance: slider-vertical;
-		appearance: slider-vertical;
 		accent-color: oklch(0.7 0.18 var(--hue));
 		/* Prevent the page from scrolling while the user drags the
 		   slider thumb on a touchscreen. */

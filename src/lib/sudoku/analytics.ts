@@ -6,10 +6,18 @@
 //
 // Design rules:
 //   - Errors are silently swallowed. Telemetry MUST NOT break gameplay.
-//   - We use `navigator.sendBeacon` first because it's specifically
-//     designed for this case: the request goes out reliably even if the
-//     user navigates away in the same tick. Fallback to `fetch` with
-//     `keepalive: true` for the few environments without sendBeacon.
+//   - We use `fetch` with `keepalive: true` and `credentials: 'omit'`.
+//     `keepalive` gives the same "request survives the document"
+//     guarantee as `navigator.sendBeacon`. `credentials: 'omit'` is
+//     the critical bit: sendBeacon's credentials mode is *fixed at*
+//     "include" by spec, so when the API origin sits on a different
+//     domain (Lambda Function URL) the browser refuses the response
+//     unless the server returns `Access-Control-Allow-Credentials:
+//     true` plus a non-wildcard `Access-Control-Allow-Origin`. The
+//     leaderboard Lambda intentionally serves `Access-Control-Allow-
+//     Origin: *` (no auth, no cookies) and never sets the credentials
+//     header, so we must opt out of credentials on the client side
+//     instead of bolting it onto the server CORS config.
 //   - When PUBLIC_API_URL is unset (local dev / preview deploys without
 //     a backend), every call is a no-op.
 //   - We never send anything beyond the player's choice of m/n/p and a
@@ -36,38 +44,27 @@ export function logGameStarted(
 	const payload = JSON.stringify({ m, n, p, source });
 
 	try {
-		// `navigator.sendBeacon` is the right tool: the browser commits
-		// to delivering the request and queues it independently of the
-		// page's lifecycle (so e.g. a click that *also* navigates away
-		// won't drop the event). It returns false if the body was too
-		// large for the user agent's queue — in practice our payloads
-		// are <100 bytes, so this only flips false on very old browsers.
-		if (typeof navigator !== 'undefined' && typeof navigator.sendBeacon === 'function') {
-			// Beacon needs a Blob to control the Content-Type; otherwise
-			// it sends as text/plain, which our handler still parses
-			// fine but the type sets a better example for any future
-			// API gateway in front of us.
-			const blob = new Blob([payload], { type: 'application/json' });
-			if (navigator.sendBeacon(ENDPOINT, blob)) return;
-		}
-
-		// Fallback: keepalive fetch. `keepalive: true` lets the request
-		// outlive the document — same survival guarantee as sendBeacon
-		// for our purposes. `void` makes the discarded Promise explicit.
+		// `keepalive: true` lets the request outlive the document, so a
+		// click that *also* navigates away won't drop the event — same
+		// survival guarantee that motivated the previous `sendBeacon`
+		// path. `credentials: 'omit'` keeps the request out of the
+		// credentialed-CORS code path so the Lambda's wildcard
+		// `Access-Control-Allow-Origin: *` is sufficient.
 		void fetch(ENDPOINT, {
 			method: 'POST',
 			headers: { 'content-type': 'application/json' },
 			body: payload,
-			keepalive: true
+			keepalive: true,
+			credentials: 'omit',
+			mode: 'cors'
 			// No Authorization header — this endpoint is intentionally
-			// public, just like the leaderboard reads. CORS is handled
-			// by the Lambda Function URL config.
+			// public, just like the leaderboard reads.
 		}).catch(() => {
 			// Telemetry failures are not user-visible. Even logging to
 			// console here would just be noise.
 		});
 	} catch {
-		// Defensive: the worst Blob/sendBeacon throw I've seen in the
-		// wild is a "SecurityError" inside a sandboxed iframe. Eat it.
+		// Defensive: e.g. a "SecurityError" thrown synchronously by
+		// fetch inside a sandboxed iframe. Eat it.
 	}
 }
