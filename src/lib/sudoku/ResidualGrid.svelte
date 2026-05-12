@@ -647,12 +647,9 @@
 
 	<div class="legend">
 		<span><span class="sw r-zero"></span> Γ = 0 (good)</span>
-		<span><span class="sw r-pos"></span> Γ &gt; 0</span>
-		<span><span class="sw r-neg"></span> Γ &lt; 0</span>
+		<span><span class="sw r-pos"></span> Γ &gt; 0 (bad)</span>
+		<span><span class="sw r-neg"></span> Γ &lt; 0 (bad)</span>
 		<br />
-		<p class="hint">
-			Goal: every cell yellow. Cell brightness scales with |Γ| — paler shades for fractional errors, deeper for |Γ| &gt; 1.
-		</p>
 	</div>
 </div>
 
