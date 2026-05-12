@@ -161,6 +161,14 @@
 	const REGION_PAD = 0.22;
 	const STEP = CELL_W + CELL_GAP;
 
+	// Glyph atlas resolution + GPU sampling. Low-res canvases + a tight
+	// DPR cap can leave stair-steps on cell edges and crisp numbers when
+	// the board is tilted; we bias slightly toward quality here.
+	const CELL_TEXTURE_SIZE = 256;
+	/** Upper bound for `renderer.setPixelRatio` — a bit above 2 supersamples most displays. */
+	const MAX_CANVAS_PIXEL_RATIO = 2.75;
+	let cellTextureAnisotropy = 8;
+
 	// === Three.js handles ===================================================
 
 	let containerEl: HTMLDivElement;
@@ -225,10 +233,13 @@
 
 	function makeCellTexture(bg: string, glyph: string, glyphColor: string): THREE.CanvasTexture {
 		const c = document.createElement('canvas');
-		c.width = c.height = 128;
+		const S = CELL_TEXTURE_SIZE;
+		c.width = c.height = S;
 		const ctx = c.getContext('2d')!;
+		ctx.imageSmoothingEnabled = true;
+		ctx.imageSmoothingQuality = 'high';
 		ctx.fillStyle = bg;
-		ctx.fillRect(0, 0, 128, 128);
+		ctx.fillRect(0, 0, S, S);
 		if (glyph) {
 			// Shrink the font for longer glyph strings ("−½", "+2") so
 			// the full label still fits inside the cell quad. The
@@ -236,18 +247,20 @@
 			// 96px size was fine; the half-integer / ±2 alphabets push
 			// us to 2-character labels that would otherwise spill out
 			// of the texture's safe area.
-			const fontPx = glyph.length <= 1 ? 96 : 72;
+			const fontPx = glyph.length <= 1 ? Math.round(0.75 * S) : Math.round(0.56 * S);
 			ctx.font = `bold ${fontPx}px ui-monospace, SFMono-Regular, Menlo, monospace`;
 			ctx.fillStyle = glyphColor;
 			ctx.textAlign = 'center';
 			ctx.textBaseline = 'middle';
-			ctx.fillText(glyph, 64, 70);
+			ctx.fillText(glyph, S / 2, S * 0.55);
 		}
 		const tex = new THREE.CanvasTexture(c);
 		tex.minFilter = THREE.LinearMipmapLinearFilter;
 		tex.magFilter = THREE.LinearFilter;
 		tex.colorSpace = THREE.SRGBColorSpace;
-		tex.anisotropy = 4;
+		tex.anisotropy = cellTextureAnisotropy;
+		tex.generateMipmaps = true;
+		tex.needsUpdate = true;
 		return tex;
 	}
 
@@ -963,7 +976,10 @@
 			alpha: true,
 			premultipliedAlpha: false
 		});
-		renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+		cellTextureAnisotropy = Math.min(16, renderer.capabilities.getMaxAnisotropy());
+		// Slightly above 2× supersamples most laptop/desktop displays (where
+		// devicePixelRatio is often 2) without the full cost of an uncapped DPR.
+		renderer.setPixelRatio(Math.min(window.devicePixelRatio, MAX_CANVAS_PIXEL_RATIO));
 		renderer.outputColorSpace = THREE.SRGBColorSpace;
 
 		scene = new THREE.Scene();
@@ -992,6 +1008,7 @@
 		const w = containerEl.clientWidth || SIZE;
 		const h = containerEl.clientHeight || SIZE;
 		if (w === 0 || h === 0) return;
+		renderer.setPixelRatio(Math.min(window.devicePixelRatio, MAX_CANVAS_PIXEL_RATIO));
 		renderer.setSize(w, h, false);
 		canvasEl.style.width = w + 'px';
 		canvasEl.style.height = h + 'px';

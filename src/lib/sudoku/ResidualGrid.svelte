@@ -43,38 +43,210 @@
 	//   b = k·p + l   ∈ [0, n·p)
 	//   c = s·p + t   ∈ [0, m·p)
 	// (matches `computeTargetTensor` / `computeResidual` in tensor.ts).
+	//
+	// Heatmap geometry (`chooseLayout`) depends only on ⟨m,n,p⟩, the **wrap**
+	// CSS size, and **devicePixelRatio** — never on hard-coded puzzle tiers.
+	// Among layouts that fit with integer NN upscale, we prefer **larger**
+	// outerGap, then middleGap, then innerGap, then cellPx (lexicographic).
 
-	// Cell size in **natural** (offscreen drawing-buffer) pixels.
-	// `blitToOnScreen()` resamples this offscreen buffer onto the
-	// on-screen canvas via canvas2d's high-quality `drawImage`
-	// (bicubic/Lanczos on Chrome, bilinear elsewhere). The tiers
-	// below are sized so that the natural buffer is always
-	// roughly 1.5–2× larger than the displayed footprint — that's
-	// the sweet spot where the high-quality downsampler has
-	// enough source pixels to produce clean anti-aliased cell
-	// edges and a uniform gap network. Going much smaller (the
-	// previous cellPx=2 for ⟨7,7,7⟩+ tier) put the source at
-	// roughly 1:1 with the device pixels, leaving the resampler
-	// with no headroom and producing visible stair-stepping.
-	// Memory cost peaks at the ⟨7,7,7⟩ ceiling ≈ 1774² × 4 ≈
-	// 12.6 MB — fine.
-	let cellPx = $derived.by(() => {
-		const maxDim = Math.max(m, n, p);
-		if (maxDim <= 2) return 16;
-		if (maxDim <= 3) return 14;
-		if (maxDim <= 4) return 10;
-		if (maxDim <= 5) return 8;
-		if (maxDim <= 6) return 5;
-		if (maxDim <= 7) return 4;
-		return 3;
+	const FIT_SCALE = 0.9;
+	/** Min device pixels along one edge of an inner cell after integer blit scale k (cellPx × k). */
+	const MIN_INNER_DEVICE_PX = 2;
+	const MAX_CELL_PX_SEARCH = 24;
+
+	type HeatmapLayout = {
+		cellPx: number;
+		innerGap: number;
+		middleGap: number;
+		outerGap: number;
+		innerW: number;
+		innerH: number;
+		middleW: number;
+		middleH: number;
+		totalW: number;
+		totalH: number;
+	};
+
+	function computeDimensions(
+		m: number,
+		n: number,
+		p: number,
+		cellPx: number,
+		innerGap: number,
+		middleGap: number,
+		outerGap: number
+	): Omit<HeatmapLayout, 'cellPx' | 'innerGap' | 'middleGap' | 'outerGap'> {
+		const innerW = p * cellPx + Math.max(0, p - 1) * innerGap;
+		const innerH = m * cellPx + Math.max(0, m - 1) * innerGap;
+		const middleW = p * innerW + Math.max(0, p - 1) * middleGap;
+		const middleH = n * innerH + Math.max(0, n - 1) * middleGap;
+		const totalW = n * middleW + Math.max(0, n - 1) * outerGap;
+		const totalH = m * middleH + Math.max(0, m - 1) * outerGap;
+		return { innerW, innerH, middleW, middleH, totalW, totalH };
+	}
+
+	// Same letterbox math as `blitToOnScreen` — must stay in sync.
+	function fitTargetBuffer(
+		wrapW: number,
+		wrapH: number,
+		dpr: number,
+		natW: number,
+		natH: number
+	): { tw: number; th: number } {
+		const wrapAspect = wrapW / wrapH;
+		const naturalAspect = natW / natH;
+		let dispW: number;
+		let dispH: number;
+		if (naturalAspect >= wrapAspect) {
+			dispW = wrapW * FIT_SCALE;
+			dispH = (wrapW / naturalAspect) * FIT_SCALE;
+		} else {
+			dispH = wrapH * FIT_SCALE;
+			dispW = (wrapH * naturalAspect) * FIT_SCALE;
+		}
+		return {
+			tw: Math.max(1, Math.round(dispW * dpr)),
+			th: Math.max(1, Math.round(dispH * dpr))
+		};
+	}
+
+	/** Lexicographic order for layout preference: outerGap → middleGap → innerGap → cellPx (larger first). */
+	function lexGreater(a: [number, number, number, number], b: [number, number, number, number]): boolean {
+		for (let i = 0; i < 4; i++) {
+			if (a[i] !== b[i]) return a[i] > b[i];
+		}
+		return false;
+	}
+
+	/** How far we search in gap space — driven only by canvas (device px, short side after FIT). */
+	function gapSearchBounds(wrapW: number, wrapH: number, dpr: number) {
+		const shortDev = Math.min(wrapW, wrapH) * dpr * FIT_SCALE;
+		const maxOuter = Math.min(10, Math.max(0, Math.floor(shortDev / 48)));
+		const maxMiddle = Math.min(8, Math.max(0, Math.floor(shortDev / 64)));
+		const maxInnerGap = 2;
+		return { maxOuter, maxMiddle, maxInnerGap };
+	}
+
+	function fallbackLayoutDims(m: number, n: number, p: number): HeatmapLayout {
+		const cellPx = 8;
+		const innerGap = 1;
+		const middleGap = 2;
+		const outerGap = 4;
+		return {
+			cellPx,
+			innerGap,
+			middleGap,
+			outerGap,
+			...computeDimensions(m, n, p, cellPx, innerGap, middleGap, outerGap)
+		};
+	}
+
+	/**
+	 * Picks (outerGap, middleGap, innerGap, cellPx) using only m,n,p, wrap size, and DPR.
+	 * Feasible layouts must allow integer blit upscale (k ≥ 1) and cellPx × k ≥ MIN_INNER_DEVICE_PX.
+	 * Among those, maximize lexicographically (outerGap, middleGap, innerGap, cellPx).
+	 */
+	function chooseLayout(
+		m: number,
+		n: number,
+		p: number,
+		wrapW: number,
+		wrapH: number
+	): HeatmapLayout {
+		if (typeof window === 'undefined' || wrapW <= 0 || wrapH <= 0) {
+			return fallbackLayoutDims(m, n, p);
+		}
+
+		const dpr = window.devicePixelRatio || 1;
+		const { maxOuter, maxMiddle, maxInnerGap } = gapSearchBounds(wrapW, wrapH, dpr);
+
+		let best: HeatmapLayout | null = null;
+		let bestLex: [number, number, number, number] = [-1, -1, -1, -1];
+
+		for (let outerGap = maxOuter; outerGap >= 0; outerGap--) {
+			for (let middleGap = maxMiddle; middleGap >= 0; middleGap--) {
+				for (let innerGap = maxInnerGap; innerGap >= 0; innerGap--) {
+					for (let cellPx = MAX_CELL_PX_SEARCH; cellPx >= 1; cellPx--) {
+						const dims = computeDimensions(m, n, p, cellPx, innerGap, middleGap, outerGap);
+						const { tw, th } = fitTargetBuffer(wrapW, wrapH, dpr, dims.totalW, dims.totalH);
+						const kFit = Math.min(tw / dims.totalW, th / dims.totalH);
+						if (kFit < 1) continue;
+						const k = Math.floor(kFit);
+						if (cellPx * k < MIN_INNER_DEVICE_PX) continue;
+						const lex: [number, number, number, number] = [
+							outerGap,
+							middleGap,
+							innerGap,
+							cellPx
+						];
+						if (lexGreater(lex, bestLex)) {
+							bestLex = lex;
+							best = { cellPx, innerGap, middleGap, outerGap, ...dims };
+						}
+					}
+				}
+			}
+		}
+
+		if (best) return best;
+
+		let bestMetric = -1;
+		let best2: HeatmapLayout | null = null;
+		let bestLex2: [number, number, number, number] = [-1, -1, -1, -1];
+
+		for (let outerGap = maxOuter; outerGap >= 0; outerGap--) {
+			for (let middleGap = maxMiddle; middleGap >= 0; middleGap--) {
+				for (let innerGap = maxInnerGap; innerGap >= 0; innerGap--) {
+					for (let cellPx = MAX_CELL_PX_SEARCH; cellPx >= 1; cellPx--) {
+						const dims = computeDimensions(m, n, p, cellPx, innerGap, middleGap, outerGap);
+						const { tw, th } = fitTargetBuffer(wrapW, wrapH, dpr, dims.totalW, dims.totalH);
+						const kFit = Math.min(tw / dims.totalW, th / dims.totalH);
+						const metric = cellPx * kFit;
+						const lex: [number, number, number, number] = [
+							outerGap,
+							middleGap,
+							innerGap,
+							cellPx
+						];
+						if (
+							metric > bestMetric ||
+							(metric === bestMetric && lexGreater(lex, bestLex2))
+						) {
+							bestMetric = metric;
+							bestLex2 = lex;
+							best2 = { cellPx, innerGap, middleGap, outerGap, ...dims };
+						}
+					}
+				}
+			}
+		}
+
+		return best2 ?? fallbackLayoutDims(m, n, p);
+	}
+
+	// Wrap size (CSS px) — drives `chooseLayout`. ResizeObserver keeps this
+	// synced so cellPx / gaps react to panel size and DPR changes.
+	let wrapCssW = $state(0);
+	let wrapCssH = $state(0);
+	// Bumped on `window.resize` so layout re-reads DPR when the OS zoom / monitor changes.
+	let displayMetricsRev = $state(0);
+
+	let layout = $derived.by(() => {
+		displayMetricsRev;
+		return chooseLayout(m, n, p, wrapCssW, wrapCssH);
 	});
 
-	// Pixel gaps between cells / between blocks at each nesting level.
-	// Held constant (not scaled with cellPx) so the hierarchy stays
-	// visible even when cells shrink to a couple pixels on big boards.
-	const INNER_GAP = 1;
-	const MIDDLE_GAP = 2;
-	const OUTER_GAP = 4;
+	let cellPx = $derived(layout.cellPx);
+	let innerGap = $derived(layout.innerGap);
+	let innerW = $derived(layout.innerW);
+	let innerH = $derived(layout.innerH);
+	let middleW = $derived(layout.middleW);
+	let middleH = $derived(layout.middleH);
+	let totalW = $derived(layout.totalW);
+	let totalH = $derived(layout.totalH);
+	/** Aliased in render/pick for readability — same as `layout.middleGap` / `outerGap`. */
+	let MIDDLE_GAP = $derived(layout.middleGap);
+	let OUTER_GAP = $derived(layout.outerGap);
 
 	// Background colors for the three nesting levels (slate shades that
 	// progressively lighten from outermost wrapper down to the cell
@@ -115,41 +287,19 @@
 		return [252, 165, 165]; // red-300 (<−1)
 	}
 
-	// Per-block dimensions in pixels. Pure derivations from
-	// (m, n, p, cellPx) so picking + drawing always agree.
-	//   inner  = C grid: m rows × p cols
-	//   middle = B grid (of inner blocks): n rows × p cols
-	//   outer  = A grid (of middle blocks): m rows × n cols
-	let innerW = $derived(p * cellPx + Math.max(0, p - 1) * INNER_GAP);
-	let innerH = $derived(m * cellPx + Math.max(0, m - 1) * INNER_GAP);
-	let middleW = $derived(p * innerW + Math.max(0, p - 1) * MIDDLE_GAP);
-	let middleH = $derived(n * innerH + Math.max(0, n - 1) * MIDDLE_GAP);
-	let totalW = $derived(n * middleW + Math.max(0, n - 1) * OUTER_GAP);
-	let totalH = $derived(m * middleH + Math.max(0, m - 1) * OUTER_GAP);
+	// Block dimensions come from `layout` (cellPx, innerGap, MIDDLE_GAP, OUTER_GAP).
 
 	let canvasEl: HTMLCanvasElement | undefined = $state();
 	let wrapEl: HTMLDivElement | undefined = $state();
 
 	// Two-stage rendering pipeline:
 	//   1. `renderHeatmap()` paints the full `totalW × totalH` natural
-	//      pixel buffer of the heatmap into an offscreen canvas via
-	//      `putImageData()` — same hierarchy, same per-cell colors as
-	//      before.
-	//   2. `blitToOnScreen()` sizes the on-screen canvas drawing
-	//      buffer to the displayed CSS dimensions × devicePixelRatio
-	//      (capped at natural for upscale) and `drawImage`s the
-	//      offscreen onto it with `imageSmoothingQuality: 'high'`.
-	//
-	// The reason we don't just CSS-scale a single natural-size
-	// canvas: when a canvas element is itself stretched/shrunk by
-	// CSS, the browser applies a fixed (often nearest-neighbour or
-	// low-tier bilinear) filter that varies by engine and produces
-	// visible aliasing on big games. Doing the resample ourselves
-	// via `drawImage` lets us pick the high-quality filter
-	// (Lanczos/bicubic on Chrome, bilinear elsewhere) and gives a
-	// consistent look across browsers — the heatmap's 1-px gap
-	// network blends into clean anti-aliased lines instead of
-	// speckled stair-stepping.
+	//      pixel buffer via `putImageData()` — same hierarchy as the
+	//      layout derivations (`innerGap`, cellPx, etc.).
+	//   2. `blitToOnScreen()` maps that buffer to device pixels with
+	//      **only** integer uniform scale factors (when upscaling) and
+	//      `imageSmoothingEnabled = false` always, so the smallest
+	//      feature is one sharp pixel — no bilinear or bicubic blur.
 	let offCanvas: HTMLCanvasElement | null = null;
 	let offCtx: CanvasRenderingContext2D | null = null;
 
@@ -204,8 +354,8 @@
 		if (W === 0 || H === 0) return;
 
 		// Render at natural resolution into the offscreen canvas;
-		// `blitToOnScreen()` is responsible for the actual on-screen
-		// presentation (sizing + smooth downsampling).
+		// `blitToOnScreen()` is responsible for presentation (integer
+		// scale + nearest-neighbour blit to device pixels).
 		const ctx = ensureOffscreen(W, H);
 		if (!ctx) return;
 
@@ -264,8 +414,8 @@
 						const ab = (a * sb + b) * sc;
 						for (let s = 0; s < m; s++) {
 							for (let t = 0; t < p; t++) {
-								const cellX = middleX + t * (cellPx + INNER_GAP);
-								const cellY = middleY + s * (cellPx + INNER_GAP);
+								const cellX = middleX + t * (cellPx + innerGap);
+								const cellY = middleY + s * (cellPx + innerGap);
 								const c = s * p + t;
 								const v = G[ab + c];
 								const rgb = rgbFor(v);
@@ -285,41 +435,16 @@
 		blitToOnScreen();
 	}
 
-	// Fraction of the wrap interior the heatmap occupies on its
-	// fitting axis. Stopping at 0.9 (i.e. a 5% margin on each
-	// side) keeps the heatmap's outermost cells from butting hard
-	// against the wrap's 1-px border. We need it that aggressive
-	// because the wrap's slate-950 background and the heatmap's
-	// outermost `BG = [2, 6, 23]` (also slate-950) are pixel-
-	// identical, so a tighter margin would visually melt into the
-	// outer-block gap network and read as part of the heatmap
-	// rather than as breathing room. The other axis already has
-	// whatever letterbox/pillar-box margin its aspect mismatch
-	// produces; this just guarantees a minimum visual gap on
-	// every side regardless of aspect.
-	const FIT_SCALE = 0.9;
+	// `FIT_SCALE` lives at top of script — shared with `fitTargetBuffer`
+	// and `chooseLayout` so layout search matches the blit exactly.
 
-	// Resample the natural-resolution offscreen heatmap onto the
-	// on-screen canvas. The on-screen drawing buffer is sized to
-	// the displayed CSS dim × devicePixelRatio so it maps 1:1 to
-	// device pixels — no browser-side CSS scaling kicks in, and
-	// every visible pixel comes straight from a `drawImage()` call
-	// with `imageSmoothingQuality: 'high'`.
-	//
-	// The previous version had an "upscaling shortcut" that left
-	// the buffer at the natural source size whenever
-	// `displayed × DPR ≥ natural`, then relied on
-	// `image-rendering: pixelated` to scale up to display via
-	// CSS. That breaks on Windows / WSL2 (devicePixelRatio is
-	// usually 1.25 or 1.5 due to Windows display scaling): for
-	// ⟨5,5,5⟩ at natural 656 px and CSS display ~600 px, the
-	// target buffer would compute to 900 (`> 656`), the shortcut
-	// would fire, the buffer would stay at 656, and the browser
-	// would then *CSS-downscale* 656 → 600 with nearest-neighbour
-	// — producing exactly the speckled stair-stepping aliasing
-	// from the screenshot. Doing the resample ourselves at the
-	// device-pixel resolution avoids the browser's CSS scaling
-	// path entirely.
+	// Map the natural-resolution offscreen heatmap onto the on-screen
+	// canvas. The backing store matches device pixels (no CSS scaling).
+	// Upscaling: integer k with buf = k×(W,H). Downscale: FIT target
+	// dimensions. `imageSmoothingEnabled` stays false — nearest-neighbour
+	// only. Historically we avoided CSS-scaling the canvas element because
+	// OS-scale factors (e.g. Windows 125%) produced inconsistent filters;
+	// explicit `drawImage` sizing keeps that under our control.
 	function blitToOnScreen() {
 		if (!canvasEl || !wrapEl || !offCanvas) return;
 		const wrapW = wrapEl.clientWidth;
@@ -329,71 +454,35 @@
 		const H = offCanvas.height;
 		if (W === 0 || H === 0) return;
 
-		// Compute on-screen display dim with letterbox/pillar-box
-		// semantics so the natural aspect is preserved. `FIT_SCALE`
-		// shrinks the result a tick below "exact fit" so the
-		// heatmap doesn't slam into the wrap's border — the saved
-		// pixels become a uniform margin around all four edges
-		// (added to whatever letterbox margin the cross-axis
-		// already has).
-		const wrapAspect = wrapW / wrapH;
-		const naturalAspect = W / H;
-		let dispW: number;
-		let dispH: number;
-		if (naturalAspect >= wrapAspect) {
-			dispW = wrapW * FIT_SCALE;
-			dispH = (wrapW / naturalAspect) * FIT_SCALE;
-		} else {
-			dispH = wrapH * FIT_SCALE;
-			dispW = (wrapH * naturalAspect) * FIT_SCALE;
-		}
-
-		// Drawing buffer = displayed CSS px × DPR. This is the
-		// real device-pixel resolution that hits the screen, so
-		// CSS won't scale the canvas after we draw into it.
 		const dpr = window.devicePixelRatio || 1;
-		const bufW = Math.max(1, Math.round(dispW * dpr));
-		const bufH = Math.max(1, Math.round(dispH * dpr));
+		const { tw: targetBufW, th: targetBufH } = fitTargetBuffer(wrapW, wrapH, dpr, W, H);
+
+		// Integer upscale keeps every natural pixel (including middle /
+		// outer gutters) a uniform k×k block. Downscale uses the FIT target
+		// size with nearest-neighbour only (no bilinear / bicubic).
+		const kFit = Math.min(targetBufW / W, targetBufH / H);
+		let bufW: number;
+		let bufH: number;
+		if (kFit >= 1) {
+			const k = Math.max(1, Math.floor(kFit));
+			bufW = W * k;
+			bufH = H * k;
+		} else {
+			bufW = targetBufW;
+			bufH = targetBufH;
+		}
 
 		if (canvasEl.width !== bufW) canvasEl.width = bufW;
 		if (canvasEl.height !== bufH) canvasEl.height = bufH;
-		canvasEl.style.width = dispW + 'px';
-		canvasEl.style.height = dispH + 'px';
+		canvasEl.style.width = bufW / dpr + 'px';
+		canvasEl.style.height = bufH / dpr + 'px';
 
 		const ctx = canvasEl.getContext('2d');
 		if (!ctx) return;
 
-		// Setting `canvas.width/height` resets the 2d context
-		// state, including imageSmoothing — so we have to (re)set
-		// it every blit, not just once. The interpolation choice
-		// scales with the board size automatically, because the
-		// natural-buffer size scales with ⟨m, n, p⟩ while the
-		// device-pixel buffer is governed by the wrap geometry:
-		//   * Upscaling (`bufW > W`, i.e. each natural pixel maps
-		//     to >1 device pixel — small boards like ⟨2,2,2⟩ at
-		//     140 px natural blowing up to ~480+ device px). Turn
-		//     smoothing OFF so drawImage falls back to nearest-
-		//     neighbour. With `imageSmoothingQuality: 'high'` on,
-		//     Lanczos/bicubic blurs every strong yellow→slate
-		//     cell boundary into a fat anti-aliased halo, which
-		//     reads as "smudged" on cells that are already 50+
-		//     device pixels wide. Nearest-neighbour keeps the
-		//     cell edges razor-crisp; the only cost is sub-pixel
-		//     non-uniformity (one row of cells might be 1 device
-		//     px wider than its neighbour at non-integer scale),
-		//     which is invisible at the cell sizes that trigger
-		//     this branch.
-		//   * Downscaling (`bufW <= W`, i.e. each device pixel
-		//     averages multiple natural pixels — large boards
-		//     like ⟨7,7,7⟩+ at 1000+ px natural compressed to
-		//     fit the wrap). Turn smoothing ON. Without bicubic
-		//     averaging, the 1-px INNER_GAP / 2-px MIDDLE_GAP /
-		//     4-px OUTER_GAP network drops random pixels and
-		//     produces visible stair-stepping. `'high'` picks
-		//     Lanczos/bicubic on Chromium and bilinear elsewhere.
-		const isUpscaling = bufW > W;
-		ctx.imageSmoothingEnabled = !isUpscaling;
-		ctx.imageSmoothingQuality = 'high';
+		// `canvas.width` / `height` assignment resets context state.
+		ctx.imageSmoothingEnabled = false;
+		ctx.imageSmoothingQuality = 'low';
 		// We size the buffer to device pixels and draw 1:1 with
 		// the screen, so the CSS image-rendering keyword is
 		// effectively a no-op — but explicitly setting `auto`
@@ -405,26 +494,36 @@
 	}
 
 	$effect(() => {
-		// Reactive deps: residual contents, and the layout dims that
-		// determine the offscreen buffer size + pixel positions.
+		// Reactive deps: residual contents, layout (canvas-aware), wrap footprint.
 		G;
 		m;
 		n;
 		p;
-		cellPx;
+		layout;
+		wrapCssW;
+		wrapCssH;
+		displayMetricsRev;
 		untrack(() => renderHeatmap());
 	});
 
-	// Watch for wrap resizes (page resize, half-row layout switching
-	// to single-column on mobile, etc.) and re-blit the (already
-	// rendered) offscreen heatmap at the new display size. No need
-	// to re-run `renderHeatmap` itself — the natural pixel buffer
-	// is unchanged, only the on-screen presentation needs updating.
 	$effect(() => {
 		if (!wrapEl) return;
-		const obs = new ResizeObserver(() => blitToOnScreen());
+		const syncWrap = () => {
+			wrapCssW = wrapEl!.clientWidth;
+			wrapCssH = wrapEl!.clientHeight;
+		};
+		syncWrap();
+		const obs = new ResizeObserver(() => syncWrap());
 		obs.observe(wrapEl);
-		return () => obs.disconnect();
+		const onResize = () => {
+			displayMetricsRev++;
+			syncWrap();
+		};
+		window.addEventListener('resize', onResize);
+		return () => {
+			obs.disconnect();
+			window.removeEventListener('resize', onResize);
+		};
 	});
 
 	// === Hover tooltip =====================================================
@@ -482,13 +581,13 @@
 		if (xInMid >= innerW || yInMid >= innerH) return null; // MIDDLE_GAP
 
 		// Inner = C[s, t]: m rows × p cols.
-		const cellSpan = cellPx + INNER_GAP;
+		const cellSpan = cellPx + innerGap;
 		const t = Math.floor(xInMid / cellSpan);
 		const s = Math.floor(yInMid / cellSpan);
 		if (t >= p || s >= m) return null;
 		const xInCell = xInMid - t * cellSpan;
 		const yInCell = yInMid - s * cellSpan;
-		if (xInCell >= cellPx || yInCell >= cellPx) return null; // INNER_GAP
+		if (xInCell >= cellPx || yInCell >= cellPx) return null; // inner gutter
 
 		const sb = n * p;
 		const sc = m * p;
