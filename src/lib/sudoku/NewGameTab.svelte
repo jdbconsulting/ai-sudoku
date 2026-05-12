@@ -15,6 +15,13 @@
 		type AlphabetPreset,
 		type AlphabetTier
 	} from './alphabets';
+	import {
+		listSaves,
+		getSave,
+		deleteSave,
+		formatLocalStamp,
+		type SaveMeta
+	} from './saves';
 
 	type Props = {
 		// Called with the player's chosen ⟨m, n, p⟩ and the alphabet
@@ -25,9 +32,18 @@
 		// telemetry stay coherent with the leaderboard's
 		// `onPlay`/`onPlayUserScore` paths.
 		onCreate: (m: number, n: number, p: number, alphabet: Alphabet) => void;
+		// Called with a parsed-but-unvalidated solution payload (the
+		// thing `GameState.loadSolutionJSON` accepts as `unknown`).
+		// The parent constructs a fresh game tab, runs the load —
+		// which throws on schema mismatch — and only pushes the tab
+		// on success. We surface any thrown error inline as a status
+		// message; that keeps both the browser-save and load-from-
+		// file paths sharing one error UI down here instead of two
+		// independent ones up in `+page.svelte`.
+		onLoad: (data: unknown) => void;
 	};
 
-	let { onCreate }: Props = $props();
+	let { onCreate, onLoad }: Props = $props();
 
 	// Selected alphabet. Defaults to the classical {−1, 0, +1} so a
 	// player who never touches the picker gets the historical game
@@ -89,6 +105,88 @@
 		nInput = n;
 		pInput = p;
 		onCreate(m, n, p, selectedAlphabet.values);
+	}
+
+	// === Saved games ========================================================
+	// Browser-local snapshots written by the in-game "Save game…" dialog.
+	// We track them here as reactive state so a delete or a cross-tab
+	// `storage` event updates the list without a hard reload. The
+	// dedicated `<input type=file>` handler also routes through `onLoad`
+	// so the parent can apply both file-imported and browser-saved JSON
+	// the same way.
+	let saves = $state<SaveMeta[]>([]);
+	let saveStatus = $state<string>('');
+	let saveStatusKind = $state<'ok' | 'err' | ''>('');
+	let fileInputEl: HTMLInputElement | null = $state(null);
+
+	function setSaveStatus(msg: string, kind: 'ok' | 'err' | '' = '') {
+		saveStatus = msg;
+		saveStatusKind = kind;
+	}
+
+	$effect(() => {
+		// Populate on mount and refresh whenever another browser tab
+		// writes to our save namespace. `storage` only fires in *other*
+		// tabs (per spec), which is exactly what we want — local
+		// mutations already update `saves` synchronously below.
+		saves = listSaves();
+		if (typeof window === 'undefined') return;
+		function onStorage(e: StorageEvent) {
+			if (!e.key || e.key.startsWith('ai-sudoku:save')) {
+				saves = listSaves();
+			}
+		}
+		window.addEventListener('storage', onStorage);
+		return () => window.removeEventListener('storage', onStorage);
+	});
+
+	function loadSave(name: string) {
+		const data = getSave(name);
+		if (!data) {
+			setSaveStatus(
+				`Could not read save “${name}”. It may have been removed from this browser.`,
+				'err'
+			);
+			saves = listSaves();
+			return;
+		}
+		try {
+			onLoad(data);
+			setSaveStatus('', '');
+		} catch (e) {
+			setSaveStatus((e as Error).message, 'err');
+		}
+	}
+
+	function removeSave(name: string) {
+		deleteSave(name);
+		saves = listSaves();
+		setSaveStatus(`Deleted “${name}”.`, 'ok');
+	}
+
+	function pickFile() {
+		fileInputEl?.click();
+	}
+
+	async function onFileChange(event: Event) {
+		const input = event.target as HTMLInputElement;
+		const file = input.files?.[0];
+		input.value = ''; // allow re-selecting the same file later
+		if (!file) return;
+		try {
+			const text = await file.text();
+			const data: unknown = JSON.parse(text);
+			onLoad(data);
+			setSaveStatus('', '');
+		} catch (e) {
+			setSaveStatus(`Could not load ${file.name}: ${(e as Error).message}`, 'err');
+		}
+	}
+
+	const scoreFmt = new Intl.NumberFormat('en-US');
+	function formatScore(s: number): string {
+		if (!Number.isFinite(s)) return '—';
+		return scoreFmt.format(s);
 	}
 
 	type Preset = {
@@ -200,12 +298,94 @@
 			description:
 				'Frontier of fast matrix multiplication research. Best-known explicit upper bound R ≤ 153 (<a href="https://arxiv.org/abs/2505.05896" target="_blank" rel="noopener noreferrer">Kauers &amp; Wood, 2025</a>, derived from the Moosbauer-Poole algorithms; score 14). Proved lower bound R ≥ 76 (<a href="https://www.sciencedirect.com/science/article/pii/S0885064X02000079" target="_blank" rel="noopener noreferrer">Bläser, 2003</a>) — meaning no algorithm with 75 or fewer multiplications can exist; whether anything in the gap [76, 153] is achievable is wide open, and an algorithm hitting the bound exactly at R = 76 would score 3,147. For approximate / border-rank algorithms, Landsberg &amp; Ottaviani\'s general 2n²−n bound (<a href="https://arxiv.org/abs/1112.6007" target="_blank" rel="noopener noreferrer">2013</a>) shows the <em>border</em> rank is at least 66 at n = 6 — whether that bound is tight or the true border rank is much higher is itself an open question. Schoolbook R = 216 (score 1).',
 			prizeCall:
-				"Research territory — likely where you'll need to plant your flag for the US$10,000 gold prize. Any R ≤ 88 wins gold here, and Bläser's lower bound only rules out R &lt; 76. That leaves a 12-rank window [76, 87] where no algorithm has ever been built and no proof has ruled one out — be the first to find out which side of that question is correct."
+				"Research territory — likely where you'll need to plant your flag for the US$10,000 gold prize. Any R ≤ 88 wins gold here, and Bläser's lower bound only rules out R &lt; 76. That leaves a 12-rank window [76, 87] where no algorithm has ever been built and no proof has ruled one out — if you find one you'll collect the gold prize."
 		}
 	];
 </script>
 
 <section class="newgame card">
+	<!-- =====================================================================
+	     Two top-level sections live inside this card: "Saved games"
+	     (returning-player resume affordance) and "New game" (fresh-
+	     start alphabet / size / presets). Both use the same flat
+	     `<header><h2>` heading style so the eye reads them as
+	     siblings at the same level of hierarchy, rather than as
+	     "one boxed sub-component above a primary section". The
+	     individual sub-pickers inside New game (Alphabet, Board
+	     size) keep their boxed fieldset look because they ARE
+	     sub-controls of New game — that's a one-level-down concept
+	     and the small-caps legend label reinforces it.
+	     ===================================================================== -->
+	<section class="saves" aria-labelledby="saves-title">
+		<header>
+			<h2 id="saves-title">Saved games</h2>
+		</header>
+		{#if saves.length === 0}
+			<p class="saves-empty">
+				No saved games yet. From inside a puzzle, click
+				<strong>Save game…</strong> on the toolbar to snapshot the boards under a
+				name you'll see here.
+			</p>
+		{:else}
+			<ul class="save-list">
+				{#each saves as save (save.name)}
+					<li class="save-row" class:solved={save.solved}>
+						<div class="save-meta">
+							<span class="save-name" title={save.name}>{save.name}</span>
+							<span class="save-sub">
+								⟨{save.m},{save.n},{save.p}⟩ · score {formatScore(save.score)} · ω
+								{save.omega.toFixed(3)}
+								{#if save.solved}· <span class="save-star">★ solved</span>{/if}
+								<span class="save-stamp">· saved {formatLocalStamp(new Date(save.savedAt))}</span>
+							</span>
+						</div>
+						<div class="save-actions">
+							<button
+								type="button"
+								class="save-load"
+								onclick={() => loadSave(save.name)}
+								title={`Resume “${save.name}” in a fresh tab`}
+							>
+								Load
+							</button>
+							<button
+								type="button"
+								class="save-delete"
+								onclick={() => removeSave(save.name)}
+								title={`Delete “${save.name}” from this browser`}
+								aria-label={`Delete ${save.name}`}
+							>
+								×
+							</button>
+						</div>
+					</li>
+				{/each}
+			</ul>
+		{/if}
+		<div class="saves-import">
+			<input
+				bind:this={fileInputEl}
+				type="file"
+				accept="application/json,.json"
+				class="visually-hidden"
+				onchange={onFileChange}
+			/>
+			<button type="button" class="file-btn" onclick={pickFile}>Load from file…</button>
+			<span class="file-hint">
+				Imports a JSON file exported from the Save game dialog (this browser or another).
+			</span>
+		</div>
+		{#if saveStatus}
+			<p
+				class="save-status"
+				class:ok={saveStatusKind === 'ok'}
+				class:err={saveStatusKind === 'err'}
+			>
+				{saveStatus}
+			</p>
+		{/if}
+	</section>
+	<br />
 	<header>
 		<h2>New game</h2>
 		<p class="lede">
@@ -308,6 +488,7 @@
 			</li>
 		{/each}
 	</ul>
+
 </section>
 
 <style>
@@ -357,11 +538,11 @@
 	}
 	.alpha-group > legend,
 	.custom > legend {
-		/* Shared top-level legend style for the two outer fieldsets
-		   ("Alphabet" and "Board size"). Kept in one rule so the two
-		   group labels stay visually identical — same monospace caps,
-		   same slate tint — and the picker reads as a coherent stack
-		   of labelled boxes. */
+		/* Small-caps legend style for the two mid-level fieldsets
+		   ("Alphabet" and "Board size") that sit *inside* the New
+		   game section. They're sub-controls one level down from
+		   the top-level <h2> headings, so the legend reads as a
+		   compact section label rather than a sibling heading. */
 		padding: 0 0.45rem;
 		font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
 		font-weight: 700;
@@ -675,6 +856,213 @@
 		outline-offset: 2px;
 	}
 
+	/* === Saved games ===================================================== */
+	.saves {
+		/* Flat top-level section, paired with the "New game" section
+		   below as a sibling. No border / background / padding of
+		   its own — the `<header><h2>` inside picks up the same
+		   styling as the New game header (via the generic `header`
+		   and `header h2` rules above), so the two top-level titles
+		   sit flush against the card's inner edge at the same
+		   visual weight. The boxed look stays on the *content*
+		   pieces below (`.save-row`, `.saves-import`) where it
+		   serves a real grouping function.
+
+		   Bottom margin is a bit larger than the 1rem within-section
+		   gaps elsewhere so the visual break between the two
+		   top-level sections reads as more significant than the
+		   gaps between sub-controls inside each one. */
+		margin: 0 0 1.5rem;
+	}
+	.saves-empty {
+		margin: 0.25rem 0 0;
+		font-size: 0.8rem;
+		color: rgb(148 163 184);
+		line-height: 1.5;
+	}
+	.saves-empty strong {
+		/* Match the toolbar hint colour in Game.svelte so the cross-
+		   pointer "click Save game… on the toolbar" reads as the same
+		   visual cue across the two surfaces. */
+		color: oklch(0.85 0.12 175);
+		font-weight: 600;
+	}
+	.save-list {
+		list-style: none;
+		padding: 0;
+		margin: 0.25rem 0 0;
+		display: flex;
+		flex-direction: column;
+		gap: 0.4rem;
+	}
+	.save-row {
+		display: flex;
+		align-items: center;
+		gap: 0.75rem;
+		padding: 0.5rem 0.7rem;
+		border: 1px solid rgb(30 41 59);
+		border-radius: 8px;
+		background: oklch(0.16 0.02 240 / 0.55);
+		transition: border-color 120ms ease, background-color 120ms ease;
+	}
+	.save-row:hover {
+		border-color: rgb(51 65 85);
+		background: oklch(0.2 0.03 240 / 0.7);
+	}
+	.save-row.solved {
+		/* Solved saves get a green tint on the left edge so a finished
+		   puzzle visually stands out from in-progress ones, echoing
+		   the green star already in the row text. */
+		border-left: 3px solid oklch(0.62 0.18 145);
+		padding-left: 0.55rem;
+	}
+	.save-meta {
+		flex: 1;
+		min-width: 0;
+		display: flex;
+		flex-direction: column;
+		gap: 0.15rem;
+	}
+	.save-name {
+		font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+		font-size: 0.88rem;
+		font-weight: 600;
+		color: rgb(248 250 252);
+		letter-spacing: 0.02em;
+		white-space: nowrap;
+		overflow: hidden;
+		text-overflow: ellipsis;
+	}
+	.save-sub {
+		font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+		font-size: 0.7rem;
+		color: rgb(148 163 184);
+		letter-spacing: 0.04em;
+		display: inline-flex;
+		flex-wrap: wrap;
+		column-gap: 0.35rem;
+		row-gap: 0.15rem;
+	}
+	.save-star {
+		color: oklch(0.85 0.2 145);
+		font-weight: 600;
+	}
+	.save-stamp {
+		color: rgb(100 116 139);
+	}
+	.save-actions {
+		flex-shrink: 0;
+		display: flex;
+		align-items: center;
+		gap: 0.4rem;
+	}
+	.save-load {
+		font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+		font-weight: 700;
+		font-size: 0.78rem;
+		letter-spacing: 0.04em;
+		padding: 0.4rem 0.85rem;
+		color: rgb(15 23 42);
+		background: linear-gradient(135deg, oklch(0.78 0.18 145), oklch(0.62 0.16 175));
+		border: 1px solid transparent;
+		border-radius: 6px;
+		cursor: pointer;
+		transition: filter 120ms ease, transform 120ms ease;
+	}
+	.save-load:hover {
+		filter: brightness(1.1);
+	}
+	.save-load:active {
+		transform: translateY(1px);
+	}
+	.save-load:focus-visible {
+		outline: 2px solid oklch(0.7 0.18 230);
+		outline-offset: 2px;
+	}
+	.save-delete {
+		all: unset;
+		display: inline-flex;
+		align-items: center;
+		justify-content: center;
+		width: 1.6rem;
+		height: 1.6rem;
+		border-radius: 6px;
+		font-size: 1.1rem;
+		line-height: 1;
+		color: rgb(100 116 139);
+		cursor: pointer;
+		transition: background-color 120ms ease, color 120ms ease;
+	}
+	.save-delete:hover {
+		background: oklch(0.62 0.22 25 / 0.25);
+		color: oklch(0.78 0.18 25);
+	}
+	.save-delete:focus-visible {
+		outline: 2px solid oklch(0.7 0.18 230);
+		outline-offset: 1px;
+	}
+	.saves-import {
+		margin-top: 0.75rem;
+		padding-top: 0.75rem;
+		border-top: 1px dashed rgb(30 41 59);
+		display: flex;
+		flex-wrap: wrap;
+		align-items: center;
+		gap: 0.75rem;
+	}
+	.file-btn {
+		background: rgb(30 41 59);
+		color: rgb(226 232 240);
+		border: 1px solid rgb(51 65 85);
+		padding: 0.45rem 0.85rem;
+		border-radius: 6px;
+		font-size: 0.8rem;
+		cursor: pointer;
+		font-family: inherit;
+	}
+	.file-btn:hover {
+		background: rgb(51 65 85);
+		border-color: rgb(100 116 139);
+	}
+	.file-btn:focus-visible {
+		outline: 2px solid oklch(0.7 0.18 230);
+		outline-offset: 2px;
+	}
+	.file-hint {
+		flex: 1;
+		min-width: 0;
+		font-size: 0.75rem;
+		color: rgb(148 163 184);
+		line-height: 1.4;
+	}
+	.save-status {
+		margin: 0.6rem 0 0;
+		font-size: 0.78rem;
+		line-height: 1.4;
+		color: rgb(148 163 184);
+	}
+	.save-status.ok {
+		color: oklch(0.78 0.18 145);
+	}
+	.save-status.err {
+		color: oklch(0.78 0.18 25);
+	}
+	.visually-hidden {
+		/* Keep the file input in the accessibility tree (so the label
+		   association on the visible button still works) without
+		   exposing it visually. `display: none` would strip it from
+		   the AT tree on some platforms. */
+		position: absolute;
+		width: 1px;
+		height: 1px;
+		padding: 0;
+		margin: -1px;
+		overflow: hidden;
+		clip: rect(0, 0, 0, 0);
+		white-space: nowrap;
+		border: 0;
+	}
+
 	@media (max-width: 640px) {
 		.newgame {
 			padding: 1rem 0.85rem;
@@ -687,6 +1075,17 @@
 		.preset-btn {
 			min-width: 0;
 			align-self: flex-start;
+		}
+		.save-row {
+			/* Stack the metadata above the action buttons on narrow
+			   viewports so the name column doesn't get pinched into
+			   a single-character ellipsis. */
+			flex-direction: column;
+			align-items: stretch;
+			gap: 0.5rem;
+		}
+		.save-actions {
+			justify-content: flex-end;
 		}
 	}
 </style>

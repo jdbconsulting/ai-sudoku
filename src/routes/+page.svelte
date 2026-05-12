@@ -92,6 +92,27 @@
 		logGameStarted(m, n, p, 'new');
 	}
 
+	function loadSavedGame(data: unknown) {
+		// Driven by the "Saved games" picker in the New Game tab —
+		// both the browser-storage rows and the legacy "Load from
+		// file…" button funnel into this single entry point. Same
+		// non-destructive policy as the other launchers: we always
+		// spawn a *fresh* game tab so the user's in-flight puzzles
+		// in other tabs are never overwritten.
+		//
+		// `loadSolutionJSON` parses + validates the payload first
+		// and throws on schema mismatch. We construct the tab
+		// upfront but only register it on success — that keeps a
+		// failed load from leaving a phantom tab behind, and the
+		// thrown error bubbles back to the New Game tab where it's
+		// rendered next to the picker.
+		const t = makeGameTab();
+		t.game.loadSolutionJSON(data);
+		tabs.push(t);
+		activeId = t.id;
+		logGameStarted(t.game.m, t.game.n, t.game.p, 'saved');
+	}
+
 	function openHighScore(entry: HighScore) {
 		// Each Play click spawns a fresh tab so the leaderboard works as a
 		// non-destructive launcher — the user's other in-progress puzzles
@@ -256,7 +277,7 @@
 		{#if activeTab.kind === 'leaderboard'}
 			<HighScoreBoard onPlay={openHighScore} onPlayUserScore={openUserScore} />
 		{:else if activeTab.kind === 'newGame'}
-			<NewGameTab onCreate={createGameFromConfig} />
+			<NewGameTab onCreate={createGameFromConfig} onLoad={loadSavedGame} />
 		{:else if activeTab.kind === 'help'}
 			<HelpTab
 				onOpenLeaderboard={() => selectTab(LEADERBOARD_ID)}

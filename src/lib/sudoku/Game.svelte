@@ -8,24 +8,23 @@
 	import { formatAlphabet, sameAlphabet, DEFAULT_ALPHABET } from './alphabets';
 
 	// Active-puzzle view. Owns the toolbar (clear / randomize /
-	// load-naive / save / load / submit), the scoreboard, and the
-	// boards + residual layout. The size-picker and preset list
-	// that used to live here have moved to the dedicated "+ New
-	// Game" tab in `+page.svelte` so changing dimensions cleanly
-	// spawns a fresh tab instead of clobbering whatever the player
-	// already has in flight.
+	// load-naive / save / submit), the scoreboard, and the boards
+	// + residual layout. The size-picker and preset list that used
+	// to live here have moved to the dedicated "+ New Game" tab in
+	// `+page.svelte` so changing dimensions cleanly spawns a fresh
+	// tab instead of clobbering whatever the player has in flight.
+	// The matching "Load game" button used to sit next to "Save"
+	// here too; that's been moved to the New Game tab (so loading a
+	// save spawns a fresh tab the same way every other launch path
+	// already does) — only the Save button stays on the toolbar
+	// since it's the action that actually concerns the puzzle in
+	// front of the player.
 
 	type Props = { game: GameState };
 	let { game }: Props = $props();
 
-	let dialogOpen = $state(false);
-	let dialogMode = $state<'export' | 'import'>('export');
+	let saveDialogOpen = $state(false);
 	let submitDialogOpen = $state(false);
-
-	function openDialog(mode: 'export' | 'import') {
-		dialogMode = mode;
-		dialogOpen = true;
-	}
 
 	// Tracks which preset is currently being applied so we can show
 	// a transient busy state if needed. The `queueMicrotask` defers
@@ -82,17 +81,10 @@
 		<span class="toolbar-sep" aria-hidden="true"></span>
 		<button
 			type="button"
-			onclick={() => openDialog('export')}
-			title="Save the current boards as JSON"
+			onclick={() => (saveDialogOpen = true)}
+			title="Snapshot the current boards — save to this browser under a name you can recall later, or export as a JSON file."
 		>
 			Save game…
-		</button>
-		<button
-			type="button"
-			onclick={() => openDialog('import')}
-			title="Load boards from a JSON game file"
-		>
-			Load game…
 		</button>
 		<button
 			type="button"
@@ -103,13 +95,13 @@
 			Submit score…
 		</button>
 		<span class="toolbar-hint">
-			Want to switch sizes? Click <strong>+ New Game</strong> in the tab bar
-			to start a fresh puzzle without disturbing this one.
+			Want to switch sizes or resume a saved game? Click <strong>+ New Game</strong> in the
+			tab bar — every entry there spawns a fresh tab without disturbing this one.
 		</span>
 	</div>
 </section>
 
-<SolutionDialog {game} bind:open={dialogOpen} mode={dialogMode} />
+<SolutionDialog {game} bind:open={saveDialogOpen} />
 <SubmitScoreDialog {game} bind:open={submitDialogOpen} />
 
 <section class="scoreboard card">

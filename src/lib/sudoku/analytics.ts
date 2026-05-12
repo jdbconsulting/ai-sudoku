@@ -30,7 +30,7 @@ const API_BASE: string = (env.PUBLIC_API_URL ?? '').replace(/\/+$/, '');
 const ENDPOINT = `${API_BASE}/events/game-started`;
 const enabled: boolean = API_BASE.length > 0;
 
-export type GameStartedSource = 'new' | 'resize' | 'famous' | 'replay';
+export type GameStartedSource = 'new' | 'resize' | 'famous' | 'replay' | 'saved';
 
 export function logGameStarted(
 	m: number,
