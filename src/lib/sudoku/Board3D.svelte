@@ -71,6 +71,36 @@
 		camera.updateProjectionMatrix();
 	}
 
+	// === View mode ==========================================================
+	// '3D' is the default isometric stack. '2D' shows only the active page,
+	// straight-on, with all rotation interaction disabled. The user toggles
+	// between modes via the canvas overlay button next to "Reset view".
+	//
+	// Implementation notes:
+	//   - Non-active pages get `group.visible = false` in 2D so they don't
+	//     paint or take part in raycasts. The stackGroup itself stays in the
+	//     scene so rebuilds and per-cell updates keep working unchanged.
+	//   - The user's rotation state (lockedPitch / lockedYaw / userQuat) is
+	//     preserved across the toggle — animate() just substitutes
+	//     IDENTITY_QUAT for stackGroup.quaternion while in 2D, so toggling
+	//     back to 3D restores whatever orientation the player had set.
+	//   - Drag rotation and momentum are gated on `mode === '3D'`, so a
+	//     pointer drag in 2D only ever resolves to a click (cell pick).
+	type ViewMode = '2D' | '3D';
+	let mode = $state<ViewMode>('3D');
+	const IDENTITY_QUAT = new THREE.Quaternion();
+
+	function toggleMode() {
+		mode = mode === '2D' ? '3D' : '2D';
+		// Drop any in-flight rotation momentum on the way into / out of 2D
+		// so the saved orientation doesn't drift while the rotation drag is
+		// inert, and so re-entering 3D doesn't snap to a half-coasted angle.
+		angVel.set(0, 0, 0);
+		if (canvasEl) {
+			canvasEl.style.cursor = mode === '2D' ? 'default' : 'grab';
+		}
+	}
+
 	// === Reactive views into game state =====================================
 
 	let R = $derived(game.R);
@@ -331,8 +361,22 @@
 		const ap = activePage;
 		const tg = tightGap;
 		const cl = clearance;
+		const flat = mode === '2D';
 		for (let r = 0; r < pages.length; r++) {
-			pages[r].group.position.z = pageZForActive(r, ap, tg, cl);
+			if (flat) {
+				// 2D: only the active page is visible, anchored at z = 0
+				// like in 3D. The hidden non-active groups still receive
+				// per-cell updates from refreshAllCells() so toggling back
+				// to 3D shows the latest values without a rebuild.
+				pages[r].group.visible = r === ap;
+				pages[r].group.position.z = 0;
+			} else {
+				pages[r].group.visible = true;
+				pages[r].group.position.z = pageZForActive(r, ap, tg, cl);
+			}
+			// Corner tabs exist for clicking through the rank stack in 3D;
+			// in 2D the page slider handles navigation, so hide them.
+			pages[r].tab.visible = !flat;
 		}
 	}
 
@@ -505,6 +549,7 @@
 
 		fitCameraToStack(pageW, pageH, Rv);
 		updateActiveStyles();
+		relayoutPagesZ();
 	}
 
 	let baseDist = 18;
@@ -626,10 +671,10 @@
 	}
 
 	// === Picking ============================================================
-	// Tabs are the ONLY way to switch pages from the 3D view. The active
-	// page's cells are pickable for cycling values. Frames and inactive
-	// cells are intentionally not pickable so a misclick on a neighbouring
-	// page never steals focus from the active one.
+	// Tabs switch pages in 3D (hidden in 2D). The active page's cells are
+	// pickable for cycling values. Frames and inactive cells are intentionally
+	// not pickable so a misclick on a neighbouring page never steals focus
+	// from the active one.
 	function getCellInteractables(): THREE.Object3D[] {
 		const ap = activePage;
 		const arr: THREE.Object3D[] = [];
@@ -645,9 +690,9 @@
 
 	function getAllInteractables(): THREE.Object3D[] {
 		const arr: THREE.Object3D[] = [];
-		// Tabs always pickable.
-		for (const p of pages) arr.push(p.tab);
-		// Cells of the active page only.
+		if (mode === '3D') {
+			for (const p of pages) arr.push(p.tab);
+		}
 		for (const cell of getCellInteractables()) arr.push(cell);
 		return arr;
 	}
@@ -837,14 +882,19 @@
 			dragMoved +=
 				Math.abs(event.clientX - dragStart.x) + Math.abs(event.clientY - dragStart.y);
 			if (dragMoved > DRAG_THRESHOLD_PX) {
-				if (dx !== 0 || dy !== 0) {
+				// 2D suppresses orientation changes entirely, but still
+				// tracks the drag so the threshold logic in onPointerUp
+				// distinguishes "drag" from "click" the same way as 3D.
+				if (mode === '3D' && (dx !== 0 || dy !== 0)) {
 					lockedYaw += dx * ROT_SENSITIVITY;
 					lockedPitch += dy * ROT_SENSITIVITY;
 					applyLockedRotation();
 					rotationAtDefault = false;
 				}
-				canvasEl.style.cursor = 'grabbing';
-				trackVelocity(dx, dy);
+				if (mode === '3D') {
+					canvasEl.style.cursor = 'grabbing';
+					trackVelocity(dx, dy);
+				}
 			}
 			return;
 		}
@@ -852,7 +902,7 @@
 		setPointerFromEvent(event);
 		raycaster.setFromCamera(pointer, camera);
 		const hits = raycaster.intersectObjects(getAllInteractables(), false);
-		canvasEl.style.cursor = hits.length ? 'pointer' : 'grab';
+		canvasEl.style.cursor = hits.length ? 'pointer' : mode === '2D' ? 'default' : 'grab';
 	}
 
 	function onPointerUp(event: PointerEvent) {
@@ -862,10 +912,12 @@
 		if (dragMoved <= DRAG_THRESHOLD_PX) {
 			handleClick(event);
 			angVel.set(0, 0, 0);
-		} else {
+		} else if (mode === '3D') {
 			commitMomentum();
+		} else {
+			angVel.set(0, 0, 0);
 		}
-		canvasEl.style.cursor = 'grab';
+		canvasEl.style.cursor = mode === '2D' ? 'default' : 'grab';
 	}
 
 	function onPointerCancel() {
@@ -885,7 +937,7 @@
 		const dt = Math.min(0.06, (now - lastFrameT) / 1000);
 		lastFrameT = now;
 
-		if (angVel.x !== 0 || angVel.y !== 0) {
+		if (mode === '3D' && (angVel.x !== 0 || angVel.y !== 0)) {
 			lockedPitch += angVel.x * dt;
 			lockedYaw += angVel.y * dt;
 			applyLockedRotation();
@@ -893,7 +945,10 @@
 		}
 
 		if (stackGroup) {
-			stackGroup.quaternion.copy(userQuat);
+			// In 2D mode the stack is shown straight on regardless of the
+			// saved orientation; userQuat is preserved so toggling back to
+			// 3D restores the user's previous rotation.
+			stackGroup.quaternion.copy(mode === '2D' ? IDENTITY_QUAT : userQuat);
 		}
 		if (renderer && scene && camera) renderer.render(scene, camera);
 		frameId = requestAnimationFrame(animate);
@@ -992,25 +1047,40 @@
 		zoom;
 		untrack(() => applyZoom());
 	});
+
+	// Mode toggle: hide/show non-active pages and re-fit the camera so the
+	// straight-on 2D framing uses the same auto-fit envelope as 3D would
+	// when rotation is at default. We also restyle so the (now possibly
+	// hidden) inactive pages don't keep stale opacities laying around.
+	$effect(() => {
+		mode;
+		untrack(() => {
+			relayoutPagesZ();
+			updateActiveStyles();
+		});
+	});
 </script>
 
 <div class="board-wrap" style:--hue={HUE_NEUTRAL}>
 	<!-- Horizontal page-spacing slider. Drag right to spread consecutive
 	     pages further apart along the camera axis; drag left to compact
 	     them. Width matches the canvas so the control reads as belonging
-	     to the board. -->
-	<label class="h-slider-row">
-		<input
-			type="range"
-			class="h-slider"
-			min="0.04"
-			max="1.4"
-			step="0.01"
-			bind:value={tightGap}
-			aria-label="Page spacing"
-			title="Page spacing — drag right to spread consecutive pages further apart, left to pack them tighter"
-		/>
-	</label>
+	     to the board. Hidden in 2D mode where the stack collapses to a
+	     single page and the slider has no visible effect. -->
+	{#if mode === '3D'}
+		<label class="h-slider-row">
+			<input
+				type="range"
+				class="h-slider"
+				min="0.04"
+				max="1.4"
+				step="0.01"
+				bind:value={tightGap}
+				aria-label="Page spacing"
+				title="Page spacing — drag right to spread consecutive pages further apart, left to pack them tighter"
+			/>
+		</label>
+	{/if}
 	<div class="canvas-row">
 		<!-- Vertical page picker. The slider is rendered bottom-up
 		     (see `.v-slider { direction: rtl }`): bottom of the
@@ -1044,18 +1114,33 @@
 				onpointerleave={() => {
 					canvasEl.style.cursor = 'default';
 				}}
-				aria-label={`Combined A/B/C board, 3D rank-page stack. Active page ${activePage + 1} of ${R}.`}
+				aria-label={mode === '2D'
+					? `Combined A/B/C board, 2D view. Active page ${activePage + 1} of ${R}.`
+					: `Combined A/B/C board, 3D rank-page stack. Active page ${activePage + 1} of ${R}.`}
 			></canvas>
-			{#if !rotationAtDefault || zoom !== 50 || tightGap !== DEFAULT_TIGHT_GAP || clearance !== DEFAULT_CLEARANCE}
+			<div class="canvas-buttons">
+				{#if !rotationAtDefault || zoom !== 50 || tightGap !== DEFAULT_TIGHT_GAP || clearance !== DEFAULT_CLEARANCE}
+					<button
+						type="button"
+						class="canvas-btn"
+						onclick={resetView}
+						title="Reset view orientation"
+					>
+						⟲ Reset view
+					</button>
+				{/if}
 				<button
 					type="button"
-					class="reset-view"
-					onclick={resetView}
-					title="Reset view orientation"
+					class="canvas-btn"
+					onclick={toggleMode}
+					title={mode === '2D'
+						? 'Switch to 3D view (rank-page stack)'
+						: 'Switch to 2D view (current page only, no rotation)'}
+					aria-pressed={mode === '2D'}
 				>
-					⟲ Reset view
+					{mode === '2D' ? '3D' : '2D'}
 				</button>
-			{/if}
+			</div>
 			<!-- Always-visible badge in the bottom-left of the canvas
 			     showing which page (rank-1 outer-product layer) is
 			     currently active. Pure read-out — page selection
@@ -1094,19 +1179,22 @@
 	<!-- Horizontal active-page-clearance slider. Drag right to widen
 	     the symmetric gap carved out in front of and behind the active
 	     page (so it stays visible even when the consecutive-page
-	     spacing is packed tight); drag left to close the gap. -->
-	<label class="h-slider-row">
-		<input
-			type="range"
-			class="h-slider"
-			min="0.2"
-			max="10"
-			step="0.05"
-			bind:value={clearance}
-			aria-label="Active page clearance"
-			title="Active-page clearance — symmetric gap carved out in front of and behind the active page"
-		/>
-	</label>
+	     spacing is packed tight); drag left to close the gap. Hidden in
+	     2D mode for the same reason as the page-spacing slider above. -->
+	{#if mode === '3D'}
+		<label class="h-slider-row">
+			<input
+				type="range"
+				class="h-slider"
+				min="0.2"
+				max="10"
+				step="0.05"
+				bind:value={clearance}
+				aria-label="Active page clearance"
+				title="Active-page clearance — symmetric gap carved out in front of and behind the active page"
+			/>
+		</label>
+	{/if}
 </div>
 
 <style>
@@ -1214,10 +1302,14 @@
 		cursor: grab;
 		touch-action: none;
 	}
-	.reset-view {
+	.canvas-buttons {
 		position: absolute;
 		top: 8px;
 		right: 8px;
+		display: flex;
+		gap: 6px;
+	}
+	.canvas-btn {
 		padding: 0.3rem 0.55rem;
 		font-size: 0.72rem;
 		font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
@@ -1228,9 +1320,14 @@
 		cursor: pointer;
 		backdrop-filter: blur(4px);
 	}
-	.reset-view:hover {
+	.canvas-btn:hover {
 		background: oklch(0.28 0.05 var(--hue) / 0.9);
 		border-color: oklch(0.6 0.14 var(--hue));
+	}
+	.canvas-btn[aria-pressed='true'] {
+		background: oklch(0.32 0.08 var(--hue) / 0.92);
+		border-color: oklch(0.65 0.16 var(--hue));
+		color: rgb(255 255 255);
 	}
 	.page-indicator {
 		position: absolute;

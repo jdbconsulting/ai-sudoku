@@ -57,10 +57,10 @@
 	// Help sits first and is the default landing tab so first-time
 	// visitors see "How to play" by default — replicating what the
 	// old auto-popping help dialog did, but as an inline tab they
-	// can dismiss with a single click on a different tab. The CTA
-	// buttons inside HelpTab itself (which call back to `selectTab`
-	// below) point users straight at the leaderboard or the new-game
-	// picker once they're done reading.
+	// can dismiss with a single click on a different tab. The CTAs
+	// inside HelpTab itself (`selectTab` for pinned tabs plus
+	// `createGameFromConfig` for Quick Play) point users through the
+	// obvious paths once they're done reading.
 	let tabs = $state<Tab[]>([helpTab, leaderboardTab, newGameTab]);
 	let activeId = $state<number>(HELP_ID);
 
@@ -232,6 +232,7 @@
 			<span class="logo">AI</span>
 			<h1>SUDOKU</h1>
 		</div>
+		<p class="banner-sub">Matrix Multiplication Edition</p>
 	</header>
 
 	<div class="tabbar" role="tablist" aria-label="Open puzzles">
@@ -282,6 +283,7 @@
 			<HelpTab
 				onOpenLeaderboard={() => selectTab(LEADERBOARD_ID)}
 				onOpenNewGame={() => selectTab(NEW_GAME_ID)}
+				onQuickPlay={() => createGameFromConfig(3, 3, 3, DEFAULT_ALPHABET)}
 			/>
 		{:else}
 			<Game game={activeTab.game} />
@@ -425,13 +427,25 @@
 	}
 
 	.banner {
+		display: flex;
+		flex-direction: column;
+		align-items: center;
 		text-align: center;
+		gap: 0;
 	}
 	.brand {
 		display: inline-flex;
 		align-items: center;
 		gap: 0.6rem;
-		margin-bottom: 0.4rem;
+	}
+	.banner-sub {
+		margin: 0;
+		font-family: ui-sans-serif, system-ui, sans-serif;
+		font-size: clamp(0.68rem, 1.1vw, 0.82rem);
+		font-style: italic;
+		font-weight: 400;
+		letter-spacing: 0.04em;
+		color: rgb(148 163 184);
 	}
 	.brand .logo {
 		font-family: ui-monospace, SFMono-Regular, Menlo, monospace;

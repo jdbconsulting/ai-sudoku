@@ -12,22 +12,23 @@
 
 	// Sits as the *first* (default) tab in the bar, so a visitor who
 	// just landed on the page sees the tutorial. Once they've read it,
-	// the two big CTAs at the bottom point them at the next obvious
-	// step: browse what other people have done (leaderboard) or pick
-	// a board size and start playing (new game).
+	// the CTAs at the top point them at the leaderboard, the size picker,
+	// or straight into ⟨3,3,3⟩ with the classical alphabet.
 
 	type Props = {
 		// Called when the player clicks the "🏆 High Score Board"
-		// CTA at the bottom of the help body. Parent (`+page.svelte`)
-		// resolves this to `selectTab(LEADERBOARD_ID)` so the tab-bar
-		// state stays the single source of truth for navigation.
+		// CTA. Parent (`+page.svelte`) resolves this to
+		// `selectTab(LEADERBOARD_ID)` so the tab-bar state stays the
+		// single source of truth for navigation.
 		onOpenLeaderboard: () => void;
 		// Called when the player clicks the "+ New Game" CTA.
 		// Resolved to `selectTab(NEW_GAME_ID)` upstream.
 		onOpenNewGame: () => void;
+		// Spawn ⟨3,3,3⟩ with {−1, 0, +1} and switch to that game tab.
+		onQuickPlay: () => void;
 	};
 
-	let { onOpenLeaderboard, onOpenNewGame }: Props = $props();
+	let { onOpenLeaderboard, onOpenNewGame, onQuickPlay }: Props = $props();
 </script>
 
 <section class="help card">
@@ -41,6 +42,11 @@
 		<button class="cta cta-newgame" type="button" onclick={onOpenNewGame}>
 			<span class="cta-title">+ New Game</span>
 			<span class="cta-sub">Pick a board size and start a fresh puzzle</span>
+			<span class="cta-arrow" aria-hidden="true">→</span>
+		</button>
+		<button class="cta cta-quickplay" type="button" onclick={onQuickPlay}>
+			<span class="cta-title">Quick Play</span>
+			<span class="cta-sub">Start ⟨3,3,3⟩ with <code>{`{−1, 0, +1}`}</code></span>
 			<span class="cta-arrow" aria-hidden="true">→</span>
 		</button>
 	</div>
@@ -397,6 +403,23 @@
 	}
 	.cta-newgame .cta-sub {
 		color: oklch(0.78 0.06 175);
+	}
+	.cta-quickplay {
+		grid-column: 1 / -1;
+		background: oklch(0.22 0.05 250 / 0.55);
+		border-color: oklch(0.42 0.1 250);
+		color: oklch(0.92 0.08 250);
+	}
+	.cta-quickplay:hover {
+		background: oklch(0.28 0.06 250 / 0.75);
+		border-color: oklch(0.55 0.14 250);
+	}
+	.cta-quickplay .cta-sub {
+		color: oklch(0.8 0.06 250);
+	}
+	.cta-quickplay .cta-sub code {
+		background: oklch(0.26 0.04 250 / 0.8);
+		color: oklch(0.85 0.12 230);
 	}
 
 	@media (max-width: 640px) {

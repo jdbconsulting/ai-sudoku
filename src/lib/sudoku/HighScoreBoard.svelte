@@ -660,30 +660,4 @@
 		outline: 2px solid oklch(0.85 0.18 145);
 		outline-offset: 2px;
 	}
-
-	.footnote {
-		margin-top: 0.85rem;
-		padding-top: 0.6rem;
-		border-top: 1px solid rgb(30 41 59);
-	}
-	.footnote p {
-		margin: 0;
-		font-size: 0.72rem;
-		color: rgb(100 116 139);
-		max-width: 78ch;
-	}
-	.footnote a {
-		color: rgb(148 163 184);
-		text-decoration: underline dotted;
-	}
-	.footnote a:hover {
-		color: rgb(203 213 225);
-	}
-	.footnote code {
-		font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-		background: rgb(30 41 59);
-		padding: 0 0.3em;
-		border-radius: 4px;
-		color: rgb(125 211 252);
-	}
 </style>

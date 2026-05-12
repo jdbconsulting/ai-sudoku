@@ -193,11 +193,17 @@ export function ranksUsed(
 	return used;
 }
 
-// Pre-load the trivial standard algorithm: rank slot indexed by (i, j, l)
+// Pre-load the trivial standard algorithm: rank slot indexed by (i, l, j)
 // computes the contribution A_{i,j} * B_{j,l} -> C_{i,l}. Returns null if R is
 // too small to fit the full m*n*p ranks. All coefficients are 0/1, so the
 // schoolbook is representable in every supported alphabet (every alphabet
 // contains 0 and at least one of ±1).
+//
+// The loop order (i, l, j) groups all `n` summands of a single output cell
+// C_{i,l} onto consecutive pages: pages 0..n-1 build C(0,0), pages n..2n-1
+// build C(0,1), and so on. Walking the rank-axis slider from page 1 to page R
+// then moves through the output cells of C in row-major order, which matches
+// how a player reads the residual.
 export function loadStandardAlgorithm(mnp: Mnp): { A: Float32Array; B: Float32Array; C: Float32Array } | null {
 	const { m, n, p, R } = mnp;
 	if (R < m * n * p) return null;
@@ -206,8 +212,8 @@ export function loadStandardAlgorithm(mnp: Mnp): { A: Float32Array; B: Float32Ar
 	const C = new Float32Array(R * m * p);
 	let r = 0;
 	for (let i = 0; i < m; i++) {
-		for (let j = 0; j < n; j++) {
-			for (let l = 0; l < p; l++) {
+		for (let l = 0; l < p; l++) {
+			for (let j = 0; j < n; j++) {
 				A[r * m * n + i * n + j] = 1;
 				B[r * n * p + j * p + l] = 1;
 				C[r * m * p + i * p + l] = 1;
