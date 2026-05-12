@@ -608,7 +608,7 @@
 	}
 
 	// Big games render hundreds of thousands of cells; the totalCells
-	// derivation feeds both the hint line and the aria label.
+	// derivation feeds the canvas aria label.
 	let totalCells = $derived(m * m * n * n * p * p);
 	const fmtCount = new Intl.NumberFormat('en-US');
 </script>
@@ -682,13 +682,6 @@
 		color: rgb(250 204 21);
 		font-style: italic;
 		margin: 0 0.15em;
-	}
-	.hint {
-		margin: 0.25rem 0 0;
-		font-size: 0.78rem;
-		color: rgb(148 163 184);
-		font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-		max-width: 70ch;
 	}
 
 	.canvas-wrap {
@@ -810,8 +803,8 @@
 	   the six per-magnitude buckets the canvas uses (paler /
 	   baseline / deeper for each sign) down to a single
 	   representative swatch per sign — the canvas still paints
-	   the full gradient, and the hint line tells the player to
-	   read magnitude off brightness. The baseline |Γ| = 1 shade
+	   the full gradient; players read magnitude from cell
+	   brightness (legend swatches indicate sign only). The baseline |Γ| = 1 shade
 	   is the representative because it's the densest signal on
 	   the classical {−1, 0, +1} alphabet that everyone starts in. */
 	.r-zero {
