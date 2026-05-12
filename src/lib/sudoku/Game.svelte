@@ -148,7 +148,7 @@
 		<span class="sub">+10⁶ at ω=2 · 1 at ω=3 · −10⁶ at ω=9</span>
 	</div>
 	<div class="trophy" class:visible={game.solved} role="status" aria-live="polite">
-		★ Algorithm valid! Empty more rank pages (or grow &lt;m,n,p&gt;) to achieve a higher score.
+		★ Algorithm valid! Empty more pages to achieve a higher score.
 	</div>
 </section>
 
