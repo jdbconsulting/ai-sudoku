@@ -2,12 +2,29 @@
 	import { HIGH_SCORES, type HighScore } from './highscores';
 	import {
 		apiEnabled,
+		entryAlphabet,
 		fetchScoreById,
 		fetchTopScores,
 		LeaderboardError,
 		type FullScore,
 		type LeaderboardEntry
 	} from './leaderboard';
+	import { DEFAULT_ALPHABET, formatAlphabet, sameAlphabet, type Alphabet } from './alphabets';
+
+	// Pre-render the default-alphabet chip once at module load — almost
+	// every famous row and most leaderboard rows hit this path, so it's
+	// worth interning the string instead of re-formatting per render.
+	const DEFAULT_ALPHABET_LABEL = formatAlphabet(DEFAULT_ALPHABET);
+
+	// Classify a row's alphabet against the historical default. Used to
+	// pick the chip color: default → dim slate, anything else → the
+	// warm-amber accent we use elsewhere for "non-default / advanced
+	// alphabet" callouts (see Game.svelte's alphabet badge, NewGameTab's
+	// advanced-tier legend). Keeps the user's eye on the rows that
+	// changed the rules of the game.
+	function alphabetChipClass(alphabet: Alphabet): string {
+		return sameAlphabet(alphabet, DEFAULT_ALPHABET) ? 'a-default' : 'a-advanced';
+	}
 
 	type Props = {
 		// Parent owns tab state, so opening a new puzzle from the leaderboard
@@ -34,6 +51,7 @@
 		if (author === 'Strassen') return 'a-strassen';
 		if (author === 'AlphaTensor') return 'a-alphatensor';
 		if (author === 'Laderman') return 'a-laderman';
+		if (author === 'Moosbauer-Poole') return 'a-flipgraph';
 		return 'a-classical';
 	}
 
@@ -120,12 +138,12 @@
 			{/if}
 		</div>
 		<p class="hint">
-			The top 100 player submissions, ranked by score. Solve a puzzle in any game tab and use <strong
+			The top 100 player submissions, ranked by score. Solve a puzzle and use <strong
 				>Submit score…</strong
 			>
 			to add your result. Scores are recomputed server-side on submission, so whatever ranks here is provably
 			valid for the chosen
-			<code>⟨m,n,p⟩</code>.
+			<code>⟨m,n,p⟩</code> and <strong>alphabet</strong>.
 		</p>
 	</header>
 
@@ -164,6 +182,9 @@
 					<th class="player">Player</th>
 					<th class="date">When</th>
 					<th class="dims">⟨m,n,p⟩</th>
+					<th class="alpha" title="Cell alphabet the submission was authored in.">
+						Alphabet
+					</th>
 					<th class="reff" title="Effective rank: ranks used + L1 patch cost for the residual.">
 						R<sub>eff</sub>
 					</th>
@@ -178,6 +199,8 @@
 			</thead>
 			<tbody>
 				{#each entries as e, i (e.id)}
+					{@const alpha = entryAlphabet(e)}
+					{@const alphaLabel = formatAlphabet(alpha)}
 					<tr class:top={i === 0}>
 						<td class="actions">
 							<button
@@ -197,6 +220,11 @@
 						</td>
 						<td class="date">{formatDate(e.submittedAt)}</td>
 						<td class="dims">⟨{e.m},{e.n},{e.p}⟩</td>
+						<td class="alpha">
+							<span class="alpha-chip {alphabetChipClass(alpha)}" title={`Authored in ${alphaLabel}`}>
+								{alphaLabel}
+							</span>
+						</td>
 						<td class="reff">{e.Reff}</td>
 						<td class="omega">{e.omega.toFixed(3)}</td>
 						<td class="solved">{e.solved ? '★' : ''}</td>
@@ -220,12 +248,9 @@
 	<header class="header">
 		<h2>Famous Algorithms</h2>
 		<p class="hint">
-			Famous and best-known matrix-multiplication algorithms whose factor entries already live in <code
-				>{`{−1, 0, +1}`}</code
-			>
-			— the alphabet this game lets you play with — scored using the same ω-based formula as the live
-			puzzles. Click <strong>Play</strong> on any row to spawn a new tab with that algorithm pre-loaded
-			into the boards, ready for you to study, perturb, or try to improve on.
+			Famous and best-known matrix-multiplication algorithms. Click <strong>Play</strong> on any row to
+			spawn a new tab with that algorithm pre-loaded into the boards,
+			ready for you to study, perturb, or try to improve on.
 		</p>
 	</header>
 
@@ -238,6 +263,12 @@
 					<th class="player">Author</th>
 					<th class="year">Year</th>
 					<th class="dims">⟨m,n,p⟩</th>
+					<th
+						class="alpha"
+						title={`Cell alphabet the algorithm's factor entries live in. Every shipped famous algorithm uses the classical ${DEFAULT_ALPHABET_LABEL}.`}
+					>
+						Alphabet
+					</th>
 					<th class="rank" title="Rank — number of multiplications">R</th>
 					<th class="naive" title="Schoolbook bound m·n·p">m·n·p</th>
 					<th
@@ -249,14 +280,17 @@
 				</tr>
 			</thead>
 			<tbody>
-				{#each HIGH_SCORES as entry, i (entry.author + ':' + entry.m + ',' + entry.n + ',' + entry.p)}
+				{#each HIGH_SCORES as entry, i (entry.author + ':' + entry.m + ',' + entry.n + ',' + entry.p + ':' + entry.alphabet.join(','))}
+					{@const famAlphaLabel = sameAlphabet(entry.alphabet, DEFAULT_ALPHABET)
+						? DEFAULT_ALPHABET_LABEL
+						: formatAlphabet(entry.alphabet)}
 					<tr class:top={i === 0}>
 						<td class="actions">
 							<button
 								type="button"
 								class="play"
 								onclick={() => onPlay(entry)}
-								title={`Open ⟨${entry.m},${entry.n},${entry.p}⟩ R=${entry.R} (${entry.author}, ${entry.year}) in a new puzzle tab`}
+								title={`Open ⟨${entry.m},${entry.n},${entry.p}⟩ R=${entry.R} (${entry.author}, ${entry.year}) in a new puzzle tab — alphabet ${famAlphaLabel}`}
 							>
 								Play →
 							</button>
@@ -275,6 +309,14 @@
 						</td>
 						<td class="year">{entry.year}</td>
 						<td class="dims">⟨{entry.m},{entry.n},{entry.p}⟩</td>
+						<td class="alpha">
+							<span
+								class="alpha-chip {alphabetChipClass(entry.alphabet)}"
+								title={`Factor entries are in ${famAlphaLabel}.`}
+							>
+								{famAlphaLabel}
+							</span>
+						</td>
 						<td class="rank">{entry.R}</td>
 						<td class="naive">{entry.m * entry.n * entry.p}</td>
 						<td class="omega">{entry.omega.toFixed(3)}</td>
@@ -284,21 +326,7 @@
 		</table>
 	</div>
 
-	<footer class="footnote">
-		<p>
-			Classical entries (Strassen, Laderman) are hand-encoded from the original papers; each
-			factorization is verified at module load against the matmul tensor, so a typo would fail
-			loudly instead of silently mis-scoring. AlphaTensor entries are extracted from
-			<a href="https://github.com/deepmind/alphatensor" target="_blank" rel="noopener noreferrer"
-				>DeepMind's official release</a
-			>
-			(<code>factorizations_r.npz</code>, Apache-2.0). Only factorizations whose entries already
-			live in <code>{`{−1, 0, +1}`}</code> can be represented on the player's grid, so larger
-			results that need ±2 or fractional factors (and characteristic-2-only schemes such as
-			Kauers–Moosbauer's 95-multiplication
-			<code>⟨5,5,5⟩</code>) are omitted here.
-		</p>
-	</footer>
+
 </section>
 
 <style>
@@ -469,6 +497,50 @@
 	.solved {
 		text-align: right;
 	}
+	.alpha {
+		/* Alphabet column. Left-aligned so the leading "{" lines up
+		   between rows, and `width: 1%` collapses the column to the
+		   widest chip — same trick the .score column uses to avoid
+		   eating row width. Without this the column would stretch
+		   across whatever surplus space the table-layout algorithm
+		   distributes and the chips would float untethered in a wide
+		   cell on desktop. */
+		text-align: left;
+		width: 1%;
+		padding-left: 0.5rem;
+		padding-right: 0.5rem;
+	}
+	.alpha-chip {
+		/* Inline pill rendering the alphabet label. Two flavours via
+		   the .a-default / .a-advanced modifier: a dim slate variant
+		   for the classical {−1, 0, +1} (which is also what every
+		   pre-alphabet-feature row backfills to, so we don't want it
+		   shouting from the page) and a warm-amber variant for any
+		   non-default alphabet — same hue as the "advanced" tier
+		   legend in NewGameTab and the alphabet badge in Game.svelte,
+		   so the eye links the three places where this concept lives.
+		   `font-variant-numeric: tabular-nums` keeps the half-integer
+		   "½" glyph from re-aligning the chip width row-to-row. */
+		display: inline-block;
+		font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+		font-size: 0.72rem;
+		letter-spacing: 0.02em;
+		padding: 0.1rem 0.5rem;
+		border-radius: 999px;
+		border: 1px solid transparent;
+		white-space: nowrap;
+		font-variant-numeric: tabular-nums;
+	}
+	.alpha-chip.a-default {
+		color: rgb(148 163 184);
+		background: oklch(0.2 0.03 240 / 0.7);
+		border-color: rgb(51 65 85);
+	}
+	.alpha-chip.a-advanced {
+		color: oklch(0.92 0.1 65);
+		background: oklch(0.28 0.08 65 / 0.25);
+		border-color: oklch(0.55 0.12 65 / 0.55);
+	}
 	.score {
 		text-align: left;
 		/* Collapse to content width. Combined with the inherited
@@ -536,6 +608,14 @@
 	}
 	.author.a-laderman {
 		color: oklch(0.82 0.15 65);
+	}
+	.author.a-flipgraph {
+		/* Flip-graph results (Moosbauer-Poole, Kauers-Wood, …): a
+		   cool violet that sits between Strassen's blue (theory)
+		   and AlphaTensor's green (AI search), reading visually as
+		   "computer-assisted search by humans" — the niche
+		   flip-graph methods occupy on the tree-of-attribution. */
+		color: oklch(0.78 0.16 305);
 	}
 	.author.a-classical {
 		color: oklch(0.82 0.12 35);

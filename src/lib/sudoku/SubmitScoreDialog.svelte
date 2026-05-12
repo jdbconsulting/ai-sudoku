@@ -9,6 +9,7 @@
 		submitScore,
 		type SubmitResult
 	} from './leaderboard';
+	import { formatAlphabet } from './alphabets';
 
 	type Props = {
 		game: GameState;
@@ -118,11 +119,17 @@
 		</header>
 
 		<div
-			class="grid grid-cols-3 gap-3 rounded-lg border border-slate-700 bg-slate-950/60 px-3 py-2 font-mono text-xs text-slate-300"
+			class="grid grid-cols-4 gap-3 rounded-lg border border-slate-700 bg-slate-950/60 px-3 py-2 font-mono text-xs text-slate-300"
 		>
 			<div>
 				<div class="text-[0.65rem] tracking-widest text-slate-500 uppercase">⟨m,n,p⟩</div>
 				<div class="text-sm text-slate-100">⟨{game.m},{game.n},{game.p}⟩</div>
+			</div>
+			<div>
+				<div class="text-[0.65rem] tracking-widest text-slate-500 uppercase">Alphabet</div>
+				<div class="text-sm text-slate-100" title="Cell-value alphabet for this submission">
+					{formatAlphabet(game.alphabet)}
+				</div>
 			</div>
 			<div>
 				<div class="text-[0.65rem] tracking-widest text-slate-500 uppercase">R<sub>eff</sub></div>

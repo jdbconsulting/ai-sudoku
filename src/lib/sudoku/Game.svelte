@@ -1,12 +1,19 @@
 <script lang="ts">
-	import { untrack } from 'svelte';
 	import { browser } from '$app/environment';
 	import Board3D from './Board3D.svelte';
 	import ResidualGrid from './ResidualGrid.svelte';
 	import SolutionDialog from './SolutionDialog.svelte';
 	import SubmitScoreDialog from './SubmitScoreDialog.svelte';
 	import type { GameState } from './state.svelte';
-	import { logGameStarted } from './analytics';
+	import { formatAlphabet, sameAlphabet, DEFAULT_ALPHABET } from './alphabets';
+
+	// Active-puzzle view. Owns the toolbar (clear / randomize /
+	// load-naive / save / load / submit), the scoreboard, and the
+	// boards + residual layout. The size-picker and preset list
+	// that used to live here have moved to the dedicated "+ New
+	// Game" tab in `+page.svelte` so changing dimensions cleanly
+	// spawns a fresh tab instead of clobbering whatever the player
+	// already has in flight.
 
 	type Props = { game: GameState };
 	let { game }: Props = $props();
@@ -20,36 +27,11 @@
 		dialogOpen = true;
 	}
 
-	// Local form state (applied via "Apply" so we don't thrash boards on each
-	// keystroke). Seeded from the current game config on mount; this component
-	// is re-mounted per tab switch so values track the active puzzle. We use
-	// `untrack` to make the "initial value only" intent explicit.
-	let mInput = $state(untrack(() => game.m));
-	let nInput = $state(untrack(() => game.n));
-	let pInput = $state(untrack(() => game.p));
-
+	// Tracks which preset is currently being applied so we can show
+	// a transient busy state if needed. The `queueMicrotask` defers
+	// the heavy board mutation a tick so the click feedback paints
+	// before we kick off the work.
 	let presetBusy = $state('');
-
-	function applyConfig() {
-		const m = clampInt(mInput, 2, 8);
-		const n = clampInt(nInput, 2, 8);
-		const p = clampInt(pInput, 2, 8);
-		mInput = m;
-		nInput = n;
-		pInput = p;
-		// Skip the telemetry beacon when the dimensions haven't actually
-		// changed — `resize` still rebuilds the boards, but a no-op
-		// "Apply size" click isn't a meaningful "started a new game"
-		// event and would just add noise to the analytics.
-		const dimensionsChanged = m !== game.m || n !== game.n || p !== game.p;
-		game.resize(m, n, p);
-		if (dimensionsChanged) logGameStarted(m, n, p, 'resize');
-	}
-
-	function clampInt(v: number, lo: number, hi: number): number {
-		const n = Math.round(Number(v) || 0);
-		return Math.min(hi, Math.max(lo, n));
-	}
 
 	function loadPreset(kind: 'standard' | 'clear' | 'random') {
 		presetBusy = kind;
@@ -61,48 +43,33 @@
 		});
 	}
 
-	function setExample(m: number, n: number, p: number) {
-		mInput = m;
-		nInput = n;
-		pInput = p;
-		applyConfig();
-	}
-
 	const fmtScore = new Intl.NumberFormat('en-US');
 	function formatScore(s: number): string {
 		if (!Number.isFinite(s)) return '—';
 		return fmtScore.format(s);
 	}
+
+	// Compact pretty-printer for the active alphabet (e.g. "{−1, 0, +1}").
+	// Reactivity tracks game.alphabet so a preset loader that snaps it to
+	// the default during play (Strassen / Famous / AlphaTensor) updates
+	// the badge live.
+	let alphabetLabel = $derived(formatAlphabet(game.alphabet));
+	let alphabetIsDefault = $derived(sameAlphabet(game.alphabet, DEFAULT_ALPHABET));
 </script>
 
-<section class="config card">
-	<div class="row">
-		<label>
-			<span>m</span>
-			<input type="number" min="2" max="8" bind:value={mInput} />
-		</label>
-		<label>
-			<span>n</span>
-			<input type="number" min="2" max="8" bind:value={nInput} />
-		</label>
-		<label>
-			<span>p</span>
-			<input type="number" min="2" max="8" bind:value={pInput} />
-		</label>
-		<button class="primary" type="button" onclick={applyConfig}>Apply size</button>
-	</div>
-	<p class="dim-hint">Each dimension can be set from <code>2</code> to <code>8</code>.</p>
-	<div class="row examples">
-		<span class="lbl">Game board presets:</span>
-		<button type="button" onclick={() => setExample(2, 2, 2)}>⟨2,2,2⟩</button>
-		<button type="button" onclick={() => setExample(2, 2, 3)}>⟨2,2,3⟩</button>
-		<button type="button" onclick={() => setExample(2, 3, 3)}>⟨2,3,3⟩</button>
-		<button type="button" onclick={() => setExample(3, 3, 3)}>⟨3,3,3⟩</button>
-		<button type="button" onclick={() => setExample(4, 4, 4)}>⟨4,4,4⟩</button>
-		<button type="button" onclick={() => setExample(4, 5, 5)}>⟨4,5,5⟩</button>
-		<button type="button" onclick={() => setExample(5, 5, 5)}>⟨5,5,5⟩</button>
-	</div>
+<section class="toolbar-card card">
 	<div class="row toolbar">
+		<span class="dims" title={`Active puzzle: ⟨${game.m},${game.n},${game.p}⟩`}>
+			⟨{game.m},{game.n},{game.p}⟩
+		</span>
+		<span
+			class="alphabet-badge"
+			class:advanced={!alphabetIsDefault}
+			title={`Cells of this puzzle are restricted to ${alphabetLabel}. Pick a different alphabet from the New Game tab to start a fresh puzzle in another world.`}
+		>
+			{alphabetLabel}
+		</span>
+		<span class="toolbar-sep" aria-hidden="true"></span>
 		<button type="button" onclick={() => loadPreset('clear')}>Clear all</button>
 		<button type="button" onclick={() => loadPreset('random')}>Randomize</button>
 		<button
@@ -136,8 +103,8 @@
 			Submit score…
 		</button>
 		<span class="toolbar-hint">
-			Want a head start? Open the
-			<strong>🏆 High Score Board</strong> tab for ready-made solutions.
+			Want to switch sizes? Click <strong>+ New Game</strong> in the tab bar
+			to start a fresh puzzle without disturbing this one.
 		</span>
 	</div>
 </section>
@@ -185,23 +152,19 @@
 	</div>
 </section>
 
-<section class="boards card">
-	<div class="boards-row">
+<div class="boards-residual-row">
+	<section class="boards panel">
 		{#if browser}
-			<Board3D {game} board="A" title="A" hue={230} />
-			<Board3D {game} board="B" title="B" hue={340} />
-			<Board3D {game} board="C" title="C" hue={45} />
+			<Board3D {game} />
 		{:else}
-			<div class="board-placeholder">A</div>
-			<div class="board-placeholder">B</div>
-			<div class="board-placeholder">C</div>
+			<div class="board-placeholder">A · B · C</div>
 		{/if}
-	</div>
-</section>
+	</section>
 
-<section class="card residual-section">
-	<ResidualGrid {game} />
-</section>
+	<div class="residual-section">
+		<ResidualGrid {game} />
+	</div>
+</div>
 
 <!-- Mobile-only sticky score bar. Pinned to the bottom of the viewport so
      the player's score is always visible while they're tapping cells, even
@@ -228,50 +191,11 @@
 		backdrop-filter: blur(6px);
 	}
 
-	.config .row {
+	.toolbar-card .row {
 		display: flex;
 		flex-wrap: wrap;
-		align-items: end;
+		align-items: center;
 		gap: 0.6rem;
-	}
-	.config label {
-		display: inline-flex;
-		flex-direction: column;
-		gap: 0.15rem;
-		font-size: 0.7rem;
-		color: rgb(148 163 184);
-		font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-		text-transform: uppercase;
-		letter-spacing: 0.08em;
-	}
-	.config input {
-		width: 64px;
-		background: rgb(15 23 42);
-		border: 1px solid rgb(51 65 85);
-		color: rgb(248 250 252);
-		font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-		padding: 0.4rem 0.5rem;
-		border-radius: 6px;
-		font-size: 1rem;
-	}
-	.config input:focus {
-		outline: 2px solid oklch(0.7 0.18 230);
-		border-color: transparent;
-	}
-	.dim-hint {
-		margin: 0.4rem 0 0;
-		font-size: 0.75rem;
-		color: rgb(148 163 184);
-	}
-	.dim-hint code {
-		font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-		background: rgb(30 41 59);
-		padding: 0 0.3em;
-		border-radius: 4px;
-		color: rgb(125 211 252);
-	}
-	.toolbar {
-		margin-top: 0.4rem;
 	}
 	.toolbar-sep {
 		display: inline-block;
@@ -280,17 +204,39 @@
 		background: rgb(51 65 85);
 		margin: 0 0.2rem;
 	}
-	.examples {
-		margin-top: 0.6rem;
-		gap: 0.4rem;
-		font-size: 0.78rem;
-	}
-	.examples .lbl {
-		color: rgb(148 163 184);
-		text-transform: uppercase;
-		letter-spacing: 0.08em;
+	.dims {
 		font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-		align-self: center;
+		font-weight: 700;
+		font-size: 0.95rem;
+		letter-spacing: 0.04em;
+		color: rgb(248 250 252);
+		padding: 0.2rem 0.55rem;
+		background: oklch(0.22 0.03 240 / 0.7);
+		border: 1px solid rgb(51 65 85);
+		border-radius: 6px;
+	}
+	.alphabet-badge {
+		/* Sits right next to the ⟨m,n,p⟩ dims badge so the player can
+		   see "what world am I in" at a glance. Plain slate styling
+		   for the classical default; warm-amber accent when the
+		   alphabet is one of the advanced presets, echoing the
+		   Famous Algorithms author colour in the leaderboard so
+		   "advanced / unusual" reads as the same family across the
+		   app. */
+		font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+		font-weight: 600;
+		font-size: 0.78rem;
+		letter-spacing: 0.04em;
+		color: rgb(203 213 225);
+		padding: 0.2rem 0.55rem;
+		background: oklch(0.18 0.02 240 / 0.65);
+		border: 1px solid rgb(51 65 85);
+		border-radius: 6px;
+	}
+	.alphabet-badge.advanced {
+		color: oklch(0.92 0.14 70);
+		background: oklch(0.22 0.05 70 / 0.55);
+		border-color: oklch(0.45 0.1 70);
 	}
 
 	.toolbar-hint {
@@ -302,7 +248,10 @@
 		line-height: 1.35;
 	}
 	.toolbar-hint strong {
-		color: oklch(0.88 0.14 70);
+		/* Echoes the teal/green of the New Game tab in `+page.svelte`
+		   (`.tab.newgame`) so the hint visually points at the exact
+		   tab the player is meant to click. */
+		color: oklch(0.85 0.12 175);
 		font-weight: 600;
 	}
 
@@ -399,38 +348,90 @@
 		opacity: 1;
 	}
 
-	.boards-row {
+	/* Side-by-side row holding the 3D combined board on the left and
+	   the residual heatmap on the right, each 1/2 the page width.
+	   `align-items: stretch` makes the two panels share the same
+	   outer height — the Board3D card's natural height (a square
+	   canvas-container plus its h-sliders + chrome) sets the bar,
+	   and the residual card's `.canvas-wrap` flex-fills whatever
+	   vertical space remains inside it after its header + legend.
+	   That keeps the residual canvas the same on-screen height as
+	   the game canvas regardless of whether the heatmap itself is
+	   tall+narrow or short+wide for the current ⟨m, n, p⟩. */
+	.boards-residual-row {
 		display: grid;
-		grid-template-columns: repeat(3, minmax(0, 1fr));
-		/* Tight gap so the three canvases can grow as large as the row
-		   allows. Combined with the higher max-width on .canvas-container
-		   in Board3D.svelte, this lifts the cap that previously kept the
-		   boards small on wide viewports. */
-		gap: 0.6rem;
+		grid-template-columns: 1fr 1fr;
+		gap: 1.5rem;
+		align-items: stretch;
+		width: 100%;
+	}
+	.boards-residual-row > * {
+		/* Without `min-width: 0` the canvases inside (which have
+		   intrinsic widths) would force the grid track to grow
+		   beyond 1fr and break the 50/50 split. */
+		min-width: 0;
+	}
+
+	/* Shared "framed panel" look for the boards card on the left
+	   and the ResidualGrid wrap on the right. The residual panel's
+	   chrome lives inside `ResidualGrid.svelte` (.wrap) and these
+	   values are kept in lockstep with it so the two halves of the
+	   row read as a matched pair. The Board3D `.board-wrap` is a
+	   direct child here and is `width: 100%` itself, so the canvas
+	   + slider rails fill out the panel almost edge-to-edge. */
+	.boards.panel {
+		display: flex;
+		justify-content: center;
 		align-items: center;
-		justify-items: center;
+		padding: 1.5rem;
+		border: 1px solid rgb(51 65 85);
+		border-radius: 14px;
+		background: radial-gradient(
+			circle at top,
+			oklch(0.18 0.02 240 / 0.6),
+			oklch(0.12 0.02 240 / 0.6)
+		);
 	}
 	.board-placeholder {
-		width: 360px;
-		height: 360px;
+		width: 100%;
+		aspect-ratio: 1 / 1;
+		max-width: 480px;
 		display: flex;
 		align-items: center;
 		justify-content: center;
 		font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-		font-size: 4rem;
+		font-size: 2rem;
 		font-weight: 700;
 		color: oklch(0.4 0.04 240);
 		border: 1px dashed oklch(0.3 0.02 240);
 		border-radius: 14px;
 	}
 	.residual-section {
+		/* Plain flex container — the residual's frame/border is
+		   provided by `.wrap` inside ResidualGrid.svelte. We just
+		   need a grid-cell wrapper here so the half-width split
+		   in `.boards-residual-row` works. */
 		display: flex;
 		justify-content: center;
-		padding: 1rem;
+		width: 100%;
 	}
 
-	@media (max-width: 900px) {
-		.boards-row {
+	/* Stack the boards + residual vertically below ~960px — but only
+	   when the viewport is in portrait orientation. In portrait, each
+	   half-width panel becomes too narrow to render the 3D scene
+	   controls or the nested heatmap legibly, and the user has
+	   plenty of vertical space to scroll through a one-column stack.
+
+	   In landscape on the same narrow widths (e.g. iPhone 14 Pro Max
+	   landscape at 932 × 430), stacking is actively harmful: each
+	   panel is ~932px wide and square, so even the top panel doesn't
+	   fit in the 430px viewport, and the residual ends up two
+	   screenfuls below. Keeping the side-by-side `1fr 1fr` layout
+	   there cuts each panel to ~466px wide × 466px tall, which is
+	   still cramped but lets the player at least see both halves
+	   at once with only a small scroll. */
+	@media (max-width: 960px) and (orientation: portrait) {
+		.boards-residual-row {
 			grid-template-columns: 1fr;
 		}
 	}
@@ -449,26 +450,6 @@
 		.card {
 			padding: 0.75rem 0.6rem;
 		}
-		/* The residual panel inside ResidualGrid.svelte is `position:
-		   fixed` on mobile, pinned just above the mobile score bar.
-		   That takes its `.wrap` out of normal flow, leaving the
-		   surrounding `.residual-section` card as an empty box. Drop
-		   it from layout entirely with `display: contents` so it
-		   neither renders chrome nor consumes a flex slot/gap in
-		   `.page`. */
-		.residual-section {
-			display: contents;
-		}
-		/* On phones the single-column rule above used `1fr` (not
-		   `minmax(0, 1fr)`), so an intrinsically wider child — like the
-		   canvas at its 300×150 default size before `resize()` runs —
-		   could force the track to grow past the viewport. Pin the
-		   minimum to 0 so the track shrinks to whatever the available
-		   width allows, matching the desktop rule. */
-		.boards-row {
-			grid-template-columns: minmax(0, 1fr);
-		}
-
 		.mobile-score-bar {
 			display: flex;
 			align-items: baseline;

@@ -10,20 +10,33 @@ Matrix multiplication of size `<m, n, p>` (computing `C = A · B` where `A` is `
 
 where the factors live in `{-1, 0, +1}`. The trivial schoolbook algorithm needs `R = m·n·p` multiplications. Strassen famously found `R = 7` for `<2,2,2>` instead of `8`. AlphaTensor (DeepMind, 2022) discovered new low-rank decompositions over `{-1, 0, 1}` for several sizes.
 
-You're given three boards:
+You're given a single board with three sub-grids — `A`, `B`, and `C` — laid out so the dimensions of an `A · B = C` matrix multiplication line up edge-to-edge:
+
+```
+            ┌─ n cols ─┬─ p cols ─┐
+            │          │          │
+       n    │  empty   │    B     │
+       rows │          │ (n × p)  │
+            ├──────────┼──────────┤
+       m    │    A     │    C     │
+       rows │ (m × n)  │ (m × p)  │
+            └──────────┴──────────┘
+```
+
+The three matrices behind those sub-grids are stacked along a rank axis of length `R`:
 
 - **A** — shape `m × n × R`, each page is `u_r` reshaped
 - **B** — shape `n × p × R`, each page is `v_r`
 - **C** — shape `m × p × R`, each page is `w_r`
 
-Your job is to set every cell so the **residual tensor** `Γ = T − Σ_r u_r ⊗ v_r ⊗ w_r` is identically zero. The residual is shown unfolded as a 2D matrix below the boards.
+Your job is to set every cell so the **residual tensor** `Γ = T − Σ_r u_r ⊗ v_r ⊗ w_r` is identically zero. The residual is shown unfolded as a 2D matrix below the board.
 
 ### Controls
 
 - **Click** a cell to cycle `−1 → 0 → +1 → −1 …`
 - **Shift-click** to cycle backwards
 - **Right-click** to reset a cell to `0`
-- Click a numbered tab on a board's stack (or the strip below) to switch which page of the rank-axis is active.
+- Click the small corner tab on any inactive page (or use the vertical slider on the canvas) to switch which page of the rank-axis is active.
 
 ## Scoring
 

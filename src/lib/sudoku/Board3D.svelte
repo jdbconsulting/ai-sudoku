@@ -2,37 +2,43 @@
 	import { onDestroy, onMount, untrack } from 'svelte';
 	import * as THREE from 'three';
 	import type { Board, CellValue, GameState } from './state.svelte';
+	import { formatGlyph } from './alphabets';
 
-	type Props = { game: GameState; board: Board; title: string; hue: number };
-	let { game, board, title, hue }: Props = $props();
+	type Props = { game: GameState };
+	let { game }: Props = $props();
 
-	// Static board roster used by the mobile-only navigation row in the
-	// header. Hues mirror the per-board hue prop Game.svelte sets when
-	// rendering each Board3D (A=230 blue, B=340 pink, C=45 amber); if
-	// those ever change, update this list to match.
-	const NAV_BOARDS: { board: Board; title: string; hue: number }[] = [
-		{ board: 'A', title: 'A', hue: 230 },
-		{ board: 'B', title: 'B', hue: 340 },
-		{ board: 'C', title: 'C', hue: 45 }
-	];
+	// Per-region hues. The three matrices used to be drawn on three
+	// separate canvases that each carried their own hue across the
+	// header, slider tracks, frame, and tab. They're now rendered as
+	// one combined page (B top-right, A bottom-left, C bottom-right)
+	// so each hue is scoped to the cells & frame of its sub-grid only.
+	const HUE_A = 230; // blue
+	const HUE_B = 340; // pink
+	const HUE_C = 45; // amber
+	// Neutral hue for shared chrome (page background tint, tab, sliders).
+	// Picked between A's blue and the slate page background so it reads
+	// as "the page" rather than belonging to any one sub-grid.
+	const HUE_NEUTRAL = 220;
 
-	function scrollToBoard(e: Event, target: Board) {
-		// Smooth-scroll to the sibling Board3D's wrap. preventDefault on
-		// the anchor click so the browser doesn't append a `#board-X`
-		// fragment to the URL or break smooth-scroll into a hard jump.
-		e.preventDefault();
-		const el = document.getElementById(`board-${target}`);
-		el?.scrollIntoView({ behavior: 'smooth', block: 'start' });
-	}
+	type RegionId = Board; // 'A' | 'B' | 'C'
+
+	type Region = {
+		id: RegionId;
+		hue: number;
+		// Top-left corner of the region in the combined-page grid (in
+		// global row/col indices). Cells of the region occupy
+		// rows [rowStart, rowStart+rows) × cols [colStart, colStart+cols).
+		rowStart: number;
+		colStart: number;
+		rows: number;
+		cols: number;
+	};
 
 	// === Per-board 3D layout knobs ==========================================
 	// `tightGap` is the spacing between consecutive non-active pages.
 	// `clearance` is the symmetric gap carved out in front of and behind
 	// the active page, so the focused page is always isolated from its
 	// neighbours regardless of how tight the rest of the stack is packed.
-	// These used to be shared across all three boards via GameState; they
-	// now live per-Board3D so each board's stack can be tuned alone via
-	// the horizontal sliders above and below its canvas.
 	const DEFAULT_TIGHT_GAP = 0.32;
 	const DEFAULT_CLEARANCE = 5;
 	let tightGap = $state(DEFAULT_TIGHT_GAP);
@@ -40,16 +46,23 @@
 
 	// === Zoom ===============================================================
 	// User-controlled camera distance, written by the right-hand vertical
-	// slider on each board. Range is 0–100 with 50 reproducing the
+	// slider on the canvas. Range is 0–100 with 50 reproducing the
 	// auto-fit distance computed by fitCameraToStack(); we map the slider
 	// log-linearly so each 25-unit step doubles or halves the factor.
-	//   slider 0   → factor 0.25× (closest, biggest active page)
+	// The slider is rendered with `direction: rtl` (see the .v-slider CSS
+	// below) so the min end sits at the bottom and the fill grows upward
+	// like a fuel gauge. We invert the slider→factor mapping accordingly,
+	// so a higher slider value means a *smaller* camera-distance factor
+	// (more zoomed in, biggest active page) — i.e. dragging the thumb up
+	// zooms in, dragging down zooms out, and the colored fill represents
+	// "how much zoom-in is dialled in".
+	//   slider 0   → factor 4.00× (bottom; farthest, whole stack visible)
 	//   slider 50  → factor 1.00× (default auto-fit)
-	//   slider 100 → factor 4.00× (farthest, whole stack visible)
+	//   slider 100 → factor 0.25× (top; closest, biggest active page)
 	let zoom = $state(50);
 
 	function zoomFactor(z: number): number {
-		return Math.pow(2, (z - 50) / 25);
+		return Math.pow(2, (50 - z) / 25);
 	}
 
 	function applyZoom() {
@@ -61,16 +74,49 @@
 	// === Reactive views into game state =====================================
 
 	let R = $derived(game.R);
-	let rows = $derived(board === 'A' ? game.m : board === 'B' ? game.n : game.m);
-	let cols = $derived(board === 'A' ? game.n : board === 'B' ? game.p : game.p);
-	let activePage = $derived(
-		board === 'A' ? game.pageA : board === 'B' ? game.pageB : game.pageC
-	);
+	let m = $derived(game.m);
+	let n = $derived(game.n);
+	let p = $derived(game.p);
+
+	// Combined-page layout. The three matrices are arranged as (with
+	// `GAP_CELLS` blank cells of separation between neighbouring regions
+	// so the sub-grids read as three distinct objects sharing one page):
+	//
+	//                ┌─ n cols ─┐  GAP  ┌─ p cols ─┐
+	//                │          │       │          │
+	//             n  │  empty   │       │    B     │
+	//             rows          │       │ (n × p)  │
+	//                └──────────┘       └──────────┘
+	//                       GAP rows of vertical space
+	//                ┌──────────┐       ┌──────────┐
+	//             m  │    A     │       │    C     │
+	//             rows (m × n)  │       │ (m × p)  │
+	//                └──────────┘       └──────────┘
+	//
+	// This matches the screenshot in the design doc: B's columns line
+	// up with C's columns (both p), and A's rows line up with C's rows
+	// (both m). The empty top-left is n × n.
+	const GAP_CELLS = 1;
+	let totalRows = $derived(n + GAP_CELLS + m);
+	let totalCols = $derived(n + GAP_CELLS + p);
+
+	let regions = $derived<Region[]>([
+		{ id: 'B', hue: HUE_B, rowStart: 0, colStart: n + GAP_CELLS, rows: n, cols: p },
+		{ id: 'A', hue: HUE_A, rowStart: n + GAP_CELLS, colStart: 0, rows: m, cols: n },
+		{
+			id: 'C',
+			hue: HUE_C,
+			rowStart: n + GAP_CELLS,
+			colStart: n + GAP_CELLS,
+			rows: m,
+			cols: p
+		}
+	]);
+
+	let activePage = $derived(game.page);
 
 	function setActive(r: number) {
-		if (board === 'A') game.pageA = r;
-		else if (board === 'B') game.pageB = r;
-		else game.pageC = r;
+		game.page = r;
 	}
 
 	// === Constants ==========================================================
@@ -79,11 +125,11 @@
 	const CELL_W = 1;
 	const CELL_GAP = 0.06;
 	const PAGE_PAD = 0.4;
-
-	// Inter-page Z spacing: the active page is always split out with a
-	// `clearance` gap on both sides so it stays visible even when the
-	// consecutive page spacing (`tightGap`) is packed very tight.
-
+	// Padding inside each region's sub-frame, between the frame border
+	// and the outer cells of that region. Smaller than PAGE_PAD because
+	// each region is already inset inside the overall page bounding box.
+	const REGION_PAD = 0.22;
+	const STEP = CELL_W + CELL_GAP;
 
 	// === Three.js handles ===================================================
 
@@ -97,21 +143,49 @@
 	const pointer = new THREE.Vector2();
 	let frameId = 0;
 
-	let texPos: THREE.CanvasTexture | undefined;
-	let texNeg: THREE.CanvasTexture | undefined;
+	// Cell textures keyed by numeric value. With the original {−1, 0, +1}
+	// alphabet this was just a `texPos` / `texNeg` pair, but the half-
+	// integer and ±2 alphabets need their own "+½", "−½", "+2", "−2"
+	// glyph textures too. We materialise each one lazily on first
+	// reference and dispose the whole map on unmount. The empty (0)
+	// value is intentionally NOT cached here — it renders as a tinted
+	// material without a glyph texture and so doesn't need a canvas.
+	const cellTextures: Map<number, THREE.CanvasTexture> = new Map();
 
-	// Mesh registry
-	let pageGroups: THREE.Group[] = [];
-	let pageFrames: THREE.Mesh[] = [];
-	let pageBgs: THREE.Mesh[] = [];
-	let cellMeshes: THREE.Mesh[][][] = [];
-	let tabMeshes: THREE.Mesh[] = [];
+	function getCellTexture(value: CellValue): THREE.CanvasTexture | undefined {
+		if (value === 0) return undefined;
+		const cached = cellTextures.get(value);
+		if (cached) return cached;
+		// Positive cells get the green glyph palette, negatives the red one.
+		// Glyphs come from the alphabet helper so "+½" / "−2" line up with
+		// every other place these numbers are printed (alphabet picker
+		// label, residual tooltip, solution-file JSON).
+		const positive = value > 0;
+		const bg = positive ? '#4ade80' : '#ef4444';
+		const fg = positive ? '#0c1226' : '#fff5f1';
+		const glyph = formatGlyph(value);
+		const tex = makeCellTexture(bg, glyph, fg);
+		cellTextures.set(value, tex);
+		return tex;
+	}
 
-	// Snapshot of dimensions used to build the current scene; we rebuild when
-	// these change.
+	// Mesh registry. One entry per page; within each page we track the
+	// shared chrome (background, tab) plus per-region frame & cell
+	// meshes. Top-left empty quadrant has no meshes.
+	type PageMeshes = {
+		group: THREE.Group;
+		bg: THREE.Mesh;
+		tab: THREE.Mesh;
+		regions: Record<RegionId, { frame: THREE.Mesh; cells: THREE.Mesh[][] }>;
+	};
+	let pages: PageMeshes[] = [];
+
+	// Snapshot of dimensions used to build the current scene; we rebuild
+	// when these change.
 	let snapR = -1;
-	let snapRows = -1;
-	let snapCols = -1;
+	let snapM = -1;
+	let snapN = -1;
+	let snapP = -1;
 
 	// === Color helpers ======================================================
 	function hueColor(L: number, C: number, h: number): THREE.Color {
@@ -126,7 +200,14 @@
 		ctx.fillStyle = bg;
 		ctx.fillRect(0, 0, 128, 128);
 		if (glyph) {
-			ctx.font = 'bold 96px ui-monospace, SFMono-Regular, Menlo, monospace';
+			// Shrink the font for longer glyph strings ("−½", "+2") so
+			// the full label still fits inside the cell quad. The
+			// original ±1 glyphs were single characters so a fixed
+			// 96px size was fine; the half-integer / ±2 alphabets push
+			// us to 2-character labels that would otherwise spill out
+			// of the texture's safe area.
+			const fontPx = glyph.length <= 1 ? 96 : 72;
+			ctx.font = `bold ${fontPx}px ui-monospace, SFMono-Regular, Menlo, monospace`;
 			ctx.fillStyle = glyphColor;
 			ctx.textAlign = 'center';
 			ctx.textBaseline = 'middle';
@@ -149,21 +230,10 @@
 		// same texture (glyphs appear mirrored from behind, which is the
 		// natural geometry) and the raycaster intersects either face — so
 		// clicks land on cells regardless of which side faces the camera.
-		if (value === 1) {
+		if (value !== 0) {
 			return new THREE.MeshBasicMaterial({
 				color: 0xffffff,
-				map: texPos,
-				transparent: false,
-				opacity: 1,
-				depthWrite: true,
-				side: THREE.DoubleSide,
-				toneMapped: false
-			});
-		}
-		if (value === -1) {
-			return new THREE.MeshBasicMaterial({
-				color: 0xffffff,
-				map: texNeg,
+				map: getCellTexture(value),
 				transparent: false,
 				opacity: 1,
 				depthWrite: true,
@@ -172,9 +242,10 @@
 			});
 		}
 		// Empty (unpicked) cells share a single yellow across all three
-		// boards — a neutral "neither + nor −" state that contrasts with
-		// the green/red glyph textures and is distinct from each board's
-		// own hue. updateActiveStyles() still dims this on inactive pages.
+		// regions — a neutral "neither + nor −" state that contrasts
+		// with the green/red glyph textures and is distinct from each
+		// region's hue.  updateActiveStyles() still dims this on
+		// inactive pages.
 		return new THREE.MeshBasicMaterial({
 			color: hueColor(0.55, 0.17, 60),
 			transparent: false,
@@ -185,21 +256,26 @@
 		});
 	}
 
-	// Frame: a thin border (no opaque fill) that outlines each page so you can
-	// see where the page lives in 3D without an overlay obscuring the cells.
-	function makeFrameMesh(pageW: number, pageH: number, mat: THREE.MeshBasicMaterial): THREE.Mesh {
+	// Frame: a thin border (no opaque fill) that outlines a rectangle
+	// of width × height centred on the origin so you can see where a
+	// region lives in 3D without an overlay obscuring the cells.
+	function makeFrameMesh(
+		width: number,
+		height: number,
+		mat: THREE.MeshBasicMaterial
+	): THREE.Mesh {
 		const T = 0.05; // border thickness
 		const outer = new THREE.Shape();
-		outer.moveTo(-(pageW / 2 + T), -(pageH / 2 + T));
-		outer.lineTo(pageW / 2 + T, -(pageH / 2 + T));
-		outer.lineTo(pageW / 2 + T, pageH / 2 + T);
-		outer.lineTo(-(pageW / 2 + T), pageH / 2 + T);
+		outer.moveTo(-(width / 2 + T), -(height / 2 + T));
+		outer.lineTo(width / 2 + T, -(height / 2 + T));
+		outer.lineTo(width / 2 + T, height / 2 + T);
+		outer.lineTo(-(width / 2 + T), height / 2 + T);
 		outer.closePath();
 		const hole = new THREE.Path();
-		hole.moveTo(-pageW / 2, -pageH / 2);
-		hole.lineTo(pageW / 2, -pageH / 2);
-		hole.lineTo(pageW / 2, pageH / 2);
-		hole.lineTo(-pageW / 2, pageH / 2);
+		hole.moveTo(-width / 2, -height / 2);
+		hole.lineTo(width / 2, -height / 2);
+		hole.lineTo(width / 2, height / 2);
+		hole.lineTo(-width / 2, height / 2);
 		hole.closePath();
 		outer.holes.push(hole);
 		const geom = new THREE.ShapeGeometry(outer);
@@ -221,12 +297,17 @@
 		while (stackGroup.children.length > 0) {
 			stackGroup.remove(stackGroup.children[0]);
 		}
-		pageGroups = [];
-		pageFrames = [];
-		pageBgs = [];
-		cellMeshes = [];
-		tabMeshes = [];
-		snapR = snapRows = snapCols = -1;
+		pages = [];
+		snapR = snapM = snapN = snapP = -1;
+	}
+
+	// Cell centre in the combined-page local coords. Row/col are global
+	// indices into the (n+m) × (n+p) combined grid.
+	function cellCentreX(col: number, totalColsLocal: number): number {
+		return (col - (totalColsLocal - 1) / 2) * STEP;
+	}
+	function cellCentreY(row: number, totalRowsLocal: number): number {
+		return -(row - (totalRowsLocal - 1) / 2) * STEP;
 	}
 
 	// === Page Z layout ======================================================
@@ -246,12 +327,12 @@
 	}
 
 	function relayoutPagesZ() {
-		if (!pageGroups.length) return;
+		if (!pages.length) return;
 		const ap = activePage;
 		const tg = tightGap;
 		const cl = clearance;
-		for (let r = 0; r < pageGroups.length; r++) {
-			pageGroups[r].position.z = pageZForActive(r, ap, tg, cl);
+		for (let r = 0; r < pages.length; r++) {
+			pages[r].group.position.z = pageZForActive(r, ap, tg, cl);
 		}
 	}
 
@@ -260,25 +341,84 @@
 		clearScene();
 
 		const Rv = R;
-		const ROWS = rows;
-		const COLS = cols;
+		const M = m;
+		const N = n;
+		const P = p;
 		snapR = Rv;
-		snapRows = ROWS;
-		snapCols = COLS;
+		snapM = M;
+		snapN = N;
+		snapP = P;
 
-		const pageW = COLS * (CELL_W + CELL_GAP) + PAGE_PAD * 2;
-		const pageH = ROWS * (CELL_W + CELL_GAP) + PAGE_PAD * 2;
+		const TR = N + GAP_CELLS + M;
+		const TC = N + GAP_CELLS + P;
+		const pageW = TC * STEP + PAGE_PAD * 2;
+		const pageH = TR * STEP + PAGE_PAD * 2;
+
+		const localRegions: Region[] = [
+			{ id: 'B', hue: HUE_B, rowStart: 0, colStart: N + GAP_CELLS, rows: N, cols: P },
+			{ id: 'A', hue: HUE_A, rowStart: N + GAP_CELLS, colStart: 0, rows: M, cols: N },
+			{
+				id: 'C',
+				hue: HUE_C,
+				rowStart: N + GAP_CELLS,
+				colStart: N + GAP_CELLS,
+				rows: M,
+				cols: P
+			}
+		];
+
+		// L-shaped page-fill geometry. The combined board is laid out
+		// with B in the top-right, A in the bottom-left, C in the
+		// bottom-right and the top-left N × N quadrant intentionally
+		// empty (it has no semantic meaning in the A·B = C product).
+		// Earlier we used a full pageW × pageH PlaneGeometry here,
+		// which painted a faint 6%-opacity bg into that empty
+		// quadrant for every inactive page in the stack — visible on
+		// screen as "lightly opaque squares" piling up in the
+		// top-left corner. Cutting the empty quadrant out of the
+		// fill leaves it cleanly void on every page.
+		//
+		// `cutX` / `cutY` mark the inside-corner of the L (in page-
+		// local centred coords). They sit at the right edge of cell
+		// column N-1 and the bottom edge of cell row N-1 respectively
+		// — i.e. flush with the rightmost / bottommost cell of the
+		// empty quadrant, so the GAP cells separating the empty
+		// quadrant from B (vertical strip at col N) and A (horizontal
+		// strip at row N) keep their bg fill and the page still reads
+		// as one connected surface.
+		const cutX = (N - 1 - (TC - 1) / 2) * STEP + CELL_W / 2;
+		const cutY = -((N - 1 - (TR - 1) / 2) * STEP) - CELL_W / 2;
+		const left = -pageW / 2;
+		const right = pageW / 2;
+		const top = pageH / 2;
+		const bottom = -pageH / 2;
+		const bgShape = new THREE.Shape();
+		// CCW winding so ShapeGeometry's triangulation faces +z; with
+		// THREE.DoubleSide on the material it doesn't really matter,
+		// but keeping the convention right avoids surprises if anyone
+		// later switches to single-sided.
+		bgShape.moveTo(left, cutY);
+		bgShape.lineTo(left, bottom);
+		bgShape.lineTo(right, bottom);
+		bgShape.lineTo(right, top);
+		bgShape.lineTo(cutX, top);
+		bgShape.lineTo(cutX, cutY);
+		bgShape.lineTo(left, cutY);
 
 		for (let r = 0; r < Rv; r++) {
 			const pg = new THREE.Group();
 			pg.position.z = pageZForActive(r, activePage, tightGap, clearance);
 
-			// Very faint page fill — defines each page as one coherent surface
-			// so the stack doesn't read as 7 disjoint borders. Stays low enough
-			// that even a front-side inactive page doesn't occlude the active.
-			const bgGeom = new THREE.PlaneGeometry(pageW, pageH);
+			// Very faint page fill — defines the combined page as one
+			// coherent surface (B, A, C frames + the gap strips
+			// between them) so the three sub-regions don't read as
+			// disjoint rectangles floating in space. Opacity stays
+			// low enough that even a front-side inactive page can't
+			// occlude the active. See the L-shape comment above for
+			// why this isn't a plain rectangle.
+			const bgGeom = new THREE.ShapeGeometry(bgShape);
 			const bgMat = new THREE.MeshBasicMaterial({
-				color: hueColor(0.18, 0.06, hue),
+				color: hueColor(0.18, 0.06, HUE_NEUTRAL),
 				transparent: true,
 				opacity: 0.0,
 				depthWrite: false,
@@ -289,47 +429,64 @@
 			bg.position.z = -0.02;
 			bg.userData = { type: 'bg', pageIndex: r };
 			pg.add(bg);
-			pageBgs.push(bg);
 
-			// Border frame outlining each page.
-			const frameMat = new THREE.MeshBasicMaterial({
-				color: hueColor(0.5, 0.12, hue),
-				transparent: true,
-				opacity: 0.55,
-				depthWrite: false,
-				side: THREE.DoubleSide,
-				toneMapped: false
-			});
-			const frame = makeFrameMesh(pageW, pageH, frameMat);
-			frame.position.z = -0.01;
-			frame.userData = { type: 'frame', pageIndex: r };
-			pg.add(frame);
-			pageFrames.push(frame);
+			// One sub-frame and one grid of cells per matrix region.
+			const regionMeshes = {} as PageMeshes['regions'];
+			for (const region of localRegions) {
+				const subW = (region.cols - 1) * STEP + CELL_W + REGION_PAD * 2;
+				const subH = (region.rows - 1) * STEP + CELL_W + REGION_PAD * 2;
+				const subCx =
+					(((region.colStart + (region.cols - 1) / 2) - (TC - 1) / 2)) * STEP;
+				const subCy =
+					-(((region.rowStart + (region.rows - 1) / 2) - (TR - 1) / 2)) * STEP;
 
-			cellMeshes.push([]);
-			for (let row = 0; row < ROWS; row++) {
-				cellMeshes[r].push([]);
-				for (let col = 0; col < COLS; col++) {
-					const value = game.getCell(board, r, row, col);
-					const geom = new THREE.PlaneGeometry(CELL_W, CELL_W);
-					const mat = makeCellMaterial(value);
-					const mesh = new THREE.Mesh(geom, mat);
-					mesh.position.x = (col - (COLS - 1) / 2) * (CELL_W + CELL_GAP);
-					mesh.position.y = -(row - (ROWS - 1) / 2) * (CELL_W + CELL_GAP);
-					mesh.position.z = 0;
-					mesh.userData = { type: 'cell', pageIndex: r, row, col };
-					pg.add(mesh);
-					cellMeshes[r][row].push(mesh);
+				const frameMat = new THREE.MeshBasicMaterial({
+					color: hueColor(0.5, 0.12, region.hue),
+					transparent: true,
+					opacity: 0.6,
+					depthWrite: false,
+					side: THREE.DoubleSide,
+					toneMapped: false
+				});
+				const frame = makeFrameMesh(subW, subH, frameMat);
+				frame.position.set(subCx, subCy, -0.01);
+				frame.userData = { type: 'frame', pageIndex: r, region: region.id };
+				pg.add(frame);
+
+				const cells: THREE.Mesh[][] = [];
+				for (let row = 0; row < region.rows; row++) {
+					const rowMeshes: THREE.Mesh[] = [];
+					for (let col = 0; col < region.cols; col++) {
+						const value = game.getCell(region.id, r, row, col);
+						const geom = new THREE.PlaneGeometry(CELL_W, CELL_W);
+						const mat = makeCellMaterial(value);
+						const mesh = new THREE.Mesh(geom, mat);
+						const gRow = region.rowStart + row;
+						const gCol = region.colStart + col;
+						mesh.position.x = cellCentreX(gCol, TC);
+						mesh.position.y = cellCentreY(gRow, TR);
+						mesh.position.z = 0;
+						mesh.userData = {
+							type: 'cell',
+							pageIndex: r,
+							region: region.id,
+							row,
+							col
+						};
+						pg.add(mesh);
+						rowMeshes.push(mesh);
+					}
+					cells.push(rowMeshes);
 				}
+				regionMeshes[region.id] = { frame, cells };
 			}
 
-			// Tab — small bevelled box at the bottom-right corner. All tabs sit
-			// at the same local position; the variable page spacing already
-			// separates them visually in screen space when the active page
-			// shifts.
+			// Tab — small bevelled box at the bottom-right corner of the
+			// combined page. The variable page spacing already separates
+			// tabs visually in screen space when the active page shifts.
 			const tabGeom = new THREE.BoxGeometry(0.55, 0.55, 0.18);
 			const tabMat = new THREE.MeshBasicMaterial({
-				color: hueColor(0.4, 0.12, hue),
+				color: hueColor(0.4, 0.12, HUE_NEUTRAL),
 				transparent: true,
 				opacity: 0.95,
 				depthWrite: false,
@@ -341,10 +498,9 @@
 			tab.position.z = 0.1;
 			tab.userData = { type: 'tab', pageIndex: r };
 			pg.add(tab);
-			tabMeshes.push(tab);
 
 			stackGroup.add(pg);
-			pageGroups.push(pg);
+			pages.push({ group: pg, bg, tab, regions: regionMeshes });
 		}
 
 		fitCameraToStack(pageW, pageH, Rv);
@@ -378,12 +534,7 @@
 		const tg = tightGap;
 		const cl = clearance;
 		const interiorTight = Math.max(0, Rv - 3) * tg;
-		const stackD =
-			Rv <= 1
-				? 0
-				: Rv === 2
-					? cl
-					: interiorTight + cl * 2;
+		const stackD = Rv <= 1 ? 0 : Rv === 2 ? cl : interiorTight + cl * 2;
 
 		// Solve for the camera distance that fits both the page width and
 		// height inside `PAGE_FILL` of the viewport when viewed straight on.
@@ -410,14 +561,18 @@
 	}
 
 	function refreshAllCells() {
-		if (!cellMeshes.length || cellMeshes.length !== snapR) return;
-		for (let r = 0; r < cellMeshes.length; r++) {
-			for (let row = 0; row < cellMeshes[r].length; row++) {
-				for (let col = 0; col < cellMeshes[r][row].length; col++) {
-					const mesh = cellMeshes[r][row][col];
-					const value = game.getCell(board, r, row, col);
-					(mesh.material as THREE.MeshBasicMaterial).dispose();
-					mesh.material = makeCellMaterial(value);
+		if (!pages.length || pages.length !== snapR) return;
+		for (let r = 0; r < pages.length; r++) {
+			for (const region of regions) {
+				const grid = pages[r].regions[region.id];
+				if (!grid) continue;
+				for (let row = 0; row < grid.cells.length; row++) {
+					for (let col = 0; col < grid.cells[row].length; col++) {
+						const mesh = grid.cells[row][col];
+						const value = game.getCell(region.id, r, row, col);
+						(mesh.material as THREE.MeshBasicMaterial).dispose();
+						mesh.material = makeCellMaterial(value);
+					}
 				}
 			}
 		}
@@ -425,9 +580,9 @@
 	}
 
 	function updateActiveStyles() {
-		if (!pageGroups.length) return;
+		if (!pages.length) return;
 		const ap = activePage;
-		for (let r = 0; r < pageGroups.length; r++) {
+		for (let r = 0; r < pages.length; r++) {
 			const isActive = r === ap;
 			// Active page: cells are opaque + depthWrite true, so they
 			// punch a clean hole through the back of the stack — back-side
@@ -437,34 +592,36 @@
 			// The big gap around the active page guarantees inactive pages
 			// don't visually crowd the active one.
 			const cellOp = isActive ? 1.0 : 0.4;
-			const frameOp = isActive ? 1.0 : 0.5;
-			const bgOp = isActive ? 0.0 : 0.08;
+			const frameOp = isActive ? 1.0 : 0.55;
+			const bgOp = isActive ? 0.0 : 0.06;
 
-			const frameMat = pageFrames[r].material as THREE.MeshBasicMaterial;
-			frameMat.opacity = frameOp;
-			frameMat.color.copy(
-				isActive ? hueColor(0.85, 0.18, hue) : hueColor(0.55, 0.12, hue)
-			);
+			(pages[r].bg.material as THREE.MeshBasicMaterial).opacity = bgOp;
 
-			(pageBgs[r].material as THREE.MeshBasicMaterial).opacity = bgOp;
-
-			for (let row = 0; row < cellMeshes[r].length; row++) {
-				for (let col = 0; col < cellMeshes[r][row].length; col++) {
-					const m = cellMeshes[r][row][col].material as THREE.MeshBasicMaterial;
-					m.opacity = cellOp;
-					// Active = opaque, z-write; inactive = transparent, no z-write.
-					m.transparent = !isActive;
-					m.depthWrite = isActive;
-					m.needsUpdate = true;
+			for (const region of regions) {
+				const grid = pages[r].regions[region.id];
+				if (!grid) continue;
+				const frameMat = grid.frame.material as THREE.MeshBasicMaterial;
+				frameMat.opacity = frameOp;
+				frameMat.color.copy(
+					isActive ? hueColor(0.85, 0.18, region.hue) : hueColor(0.55, 0.12, region.hue)
+				);
+				for (let row = 0; row < grid.cells.length; row++) {
+					for (let col = 0; col < grid.cells[row].length; col++) {
+						const mat = grid.cells[row][col].material as THREE.MeshBasicMaterial;
+						mat.opacity = cellOp;
+						mat.transparent = !isActive;
+						mat.depthWrite = isActive;
+						mat.needsUpdate = true;
+					}
 				}
 			}
 
-			const tabMat = tabMeshes[r].material as THREE.MeshBasicMaterial;
+			const tabMat = pages[r].tab.material as THREE.MeshBasicMaterial;
 			tabMat.opacity = isActive ? 1.0 : 0.8;
 			tabMat.color.copy(
-				isActive ? hueColor(0.85, 0.18, hue) : hueColor(0.4, 0.12, hue)
+				isActive ? hueColor(0.85, 0.18, HUE_NEUTRAL) : hueColor(0.4, 0.12, HUE_NEUTRAL)
 			);
-			tabMeshes[r].scale.setScalar(isActive ? 1.25 : 0.85);
+			pages[r].tab.scale.setScalar(isActive ? 1.25 : 0.85);
 		}
 	}
 
@@ -476,8 +633,12 @@
 	function getCellInteractables(): THREE.Object3D[] {
 		const ap = activePage;
 		const arr: THREE.Object3D[] = [];
-		if (cellMeshes[ap]) {
-			for (const row of cellMeshes[ap]) for (const cell of row) arr.push(cell);
+		const page = pages[ap];
+		if (!page) return arr;
+		for (const region of regions) {
+			const grid = page.regions[region.id];
+			if (!grid) continue;
+			for (const row of grid.cells) for (const cell of row) arr.push(cell);
 		}
 		return arr;
 	}
@@ -485,12 +646,9 @@
 	function getAllInteractables(): THREE.Object3D[] {
 		const arr: THREE.Object3D[] = [];
 		// Tabs always pickable.
-		for (const t of tabMeshes) arr.push(t);
+		for (const p of pages) arr.push(p.tab);
 		// Cells of the active page only.
-		const ap = activePage;
-		if (cellMeshes[ap]) {
-			for (const row of cellMeshes[ap]) for (const cell of row) arr.push(cell);
-		}
+		for (const cell of getCellInteractables()) arr.push(cell);
 		return arr;
 	}
 
@@ -517,14 +675,15 @@
 		const data = hit.object.userData as {
 			type: string;
 			pageIndex: number;
+			region?: RegionId;
 			row?: number;
 			col?: number;
 		};
 		if (data.type === 'tab') {
 			setActive(data.pageIndex);
-		} else if (data.type === 'cell') {
+		} else if (data.type === 'cell' && data.region) {
 			const dir = event.shiftKey ? -1 : 1;
-			game.cycle(board, data.pageIndex, data.row!, data.col!, dir);
+			game.cycle(data.region, data.pageIndex, data.row!, data.col!, dir);
 		}
 	}
 
@@ -535,50 +694,63 @@
 		const data = hit.object.userData as {
 			type: string;
 			pageIndex: number;
+			region?: RegionId;
 			row?: number;
 			col?: number;
 		};
-		if (data.type === 'cell') {
-			game.setCell(board, data.pageIndex, data.row!, data.col!, 0);
+		if (data.type === 'cell' && data.region) {
+			game.setCell(data.region, data.pageIndex, data.row!, data.col!, 0);
 		}
 	}
 
 	// === Rotation drag + momentum ===========================================
-	// Orientation is stored as a unit quaternion so the user can spin the
-	// stack freely in any direction without hitting a pole — the previous
-	// Euler-based scheme clamped the X axis just shy of ±π/2 to avoid
-	// gimbal lock, which meant horizontal flicks could "spin over the
-	// top" but vertical flicks could not. The quaternion approach also
-	// makes rotations compose correctly under pre-multiplication, so a
-	// drag in any screen direction always rotates around an axis lying
-	// in the screen plane (true trackball/arcball feel) regardless of
-	// how the stack is currently oriented.
+	// The default orientation is a deeper isometric tilt than the previous
+	// 30°/30°: the top of each page leans 40° toward the camera and a
+	// complementary 40° yaw reveals the depth of the rank-page stack. The
+	// steeper angle makes the inter-page Z spacing read more strongly at
+	// the default view so it's obvious there's a stack to thumb through.
 	//
-	// The default orientation is an isometric-style view from above: the
-	// top of each page tilts toward the camera and a complementary yaw
-	// reveals the depth of the rank-page stack at roughly 30°/30°. We
-	// build the default quaternion from that exact Euler triple so the
-	// initial framing is identical to the old implementation.
-	const DEFAULT_QUAT = new THREE.Quaternion().setFromEuler(
-		new THREE.Euler(Math.PI / 6, -Math.PI / 6, 0, 'XYZ')
+	// Rotation is permanently constrained to the world X-Y plane (orbit-
+	// camera semantics, no roll). Drag input feeds two angles — pitch
+	// around world X, yaw around world Y — and userQuat is rebuilt from
+	// `Euler(pitch, yaw, 0, 'XYZ')` every frame the orientation is
+	// touched. The rotation axis therefore always lies in the world X-Y
+	// plane and the stack never picks up Z-axis roll: horizontal drag
+	// spins the stack like a turntable, vertical drag tips it forward/
+	// back, but the stack's "up" never tilts left/right relative to the
+	// camera's up.
+	//
+	// Pitch is intentionally NOT clamped — the user can somersault the
+	// stack past ±90° to see its back face. The Euler XYZ gimbal
+	// singularity at pitch = ±π/2 (body-Y aligns with world Z, so a
+	// horizontal drag right then reads mathematically as a roll of the
+	// camera view) is acceptable because the user drags through that
+	// single pitch value in a few frames; the visual quirk disappears
+	// the moment pitch leaves ±π/2.
+	const DEFAULT_TILT_RAD = (40 * Math.PI) / 180;
+	let lockedPitch = $state(DEFAULT_TILT_RAD);
+	let lockedYaw = $state(-DEFAULT_TILT_RAD);
+	const _eulerHelper = new THREE.Euler(0, 0, 0, 'XYZ');
+	// userQuat is mutated in place by applyLockedRotation (called from the
+	// drag handler and the momentum integrator) and then read by `animate`
+	// to drive `stackGroup.quaternion`. It is intentionally NOT a $state —
+	// the reactive driver for the reset button is `rotationAtDefault`
+	// below, which we flip whenever the orientation diverges from the
+	// default.
+	const userQuat = new THREE.Quaternion().setFromEuler(
+		_eulerHelper.set(DEFAULT_TILT_RAD, -DEFAULT_TILT_RAD, 0, 'XYZ')
 	);
-	// userQuat is mutated in place each frame by both the drag handler
-	// and the momentum integrator. It is intentionally NOT a $state — the
-	// reactive driver for the reset button is `rotationAtDefault` below,
-	// which we flip whenever the orientation diverges from the default.
-	const userQuat = DEFAULT_QUAT.clone();
-	// Reactive flag: true exactly when no drag/flick has happened since
-	// the last reset. Becomes false on first drag delta or when momentum
-	// is being integrated; flipped back to true by resetView().
 	let rotationAtDefault = $state(true);
 
-	// Pre-allocated scratch objects so the per-frame integrator and the
-	// pointermove handler don't churn the allocator.
-	const _qDelta = new THREE.Quaternion();
-	const _axis = new THREE.Vector3();
-	// Angular velocity stored as ω·axis (rad/sec). Magnitude = angular
-	// speed; direction = axis of rotation in world space. Lives in world
-	// coordinates so flicks always rotate around screen-plane axes.
+	function applyLockedRotation() {
+		_eulerHelper.set(lockedPitch, lockedYaw, 0, 'XYZ');
+		userQuat.setFromEuler(_eulerHelper);
+	}
+
+	// Angular velocity in (pitchRate, yawRate, 0) form (rad/sec). Set by
+	// `commitMomentum` from the smoothed pointer-pixel velocity at release
+	// and integrated into lockedPitch / lockedYaw each frame so a flick
+	// coasts smoothly to a stop.
 	const angVel = new THREE.Vector3();
 
 	let dragging = false;
@@ -588,16 +760,16 @@
 	const DRAG_THRESHOLD_PX = 5;
 	const ROT_SENSITIVITY = 0.008;
 
-	// Smoothed per-axis pixel velocity in px/ms. Sampled during drag so we
-	// can hand off the motion as angular momentum on release.
 	let velPxX = 0;
 	let velPxY = 0;
 	let lastMoveT = 0;
-	const VEL_SMOOTH = 0.35; // 0..1, higher = more responsive
-	const RELEASE_GRACE_MS = 90; // mouse must have moved within this window for momentum
+	const VEL_SMOOTH = 0.35;
+	const RELEASE_GRACE_MS = 90;
 
 	export function resetView() {
-		userQuat.copy(DEFAULT_QUAT);
+		lockedPitch = DEFAULT_TILT_RAD;
+		lockedYaw = -DEFAULT_TILT_RAD;
+		applyLockedRotation();
 		angVel.set(0, 0, 0);
 		rotationAtDefault = true;
 		zoom = 50;
@@ -605,9 +777,6 @@
 		clearance = DEFAULT_CLEARANCE;
 	}
 
-	// Wheel = page stepper. We accumulate `deltaY` until it crosses a
-	// threshold so a single mouse-wheel "click" steps once and a trackpad
-	// flick doesn't tear through the stack at one page per event.
 	let wheelAccum = 0;
 	const WHEEL_STEP_THRESHOLD = 40;
 
@@ -616,7 +785,13 @@
 		if (!R) return;
 		wheelAccum += event.deltaY;
 		if (Math.abs(wheelAccum) < WHEEL_STEP_THRESHOLD) return;
-		const dir = wheelAccum > 0 ? 1 : -1;
+		// Wheel direction is mapped to the *visual* motion of the
+		// page-slider thumb: scrolling up moves the thumb up (toward
+		// higher page indices, since the slider is rendered bottom-up
+		// with `direction: rtl`), and scrolling down moves it down.
+		// Browsers report a downward scroll as `deltaY > 0`, so a
+		// positive accumulator corresponds to "page index decreases".
+		const dir = wheelAccum > 0 ? -1 : 1;
 		wheelAccum = 0;
 		const next = Math.max(0, Math.min(R - 1, activePage + dir));
 		if (next !== activePage) setActive(next);
@@ -636,30 +811,18 @@
 		const now = performance.now();
 		const idle = now - lastMoveT;
 		if (idle > RELEASE_GRACE_MS) {
-			// Mouse went still before release — no spin.
 			angVel.set(0, 0, 0);
 			return;
 		}
-		// Convert smoothed px/ms → rad/sec around world-space axes that
-		// lie in the screen plane. Horizontal pixel velocity becomes a
-		// yaw around world +Y; vertical pixel velocity becomes a pitch
-		// around world +X. The sensitivity factor matches the direct
-		// drag conversion below so a flick continues seamlessly from
-		// the last drag delta.
 		angVel.set(velPxY * 1000 * ROT_SENSITIVITY, velPxX * 1000 * ROT_SENSITIVITY, 0);
 	}
 
 	function onPointerDown(event: PointerEvent) {
-		// Left button starts a potential rotation drag. If the pointer goes
-		// up before crossing DRAG_THRESHOLD_PX, we treat it as a click
-		// instead (tab switch / cycle cell value). Right button is reserved
-		// for the contextmenu cell-reset action and is ignored here.
 		if (event.button !== 0) return;
 		dragging = true;
 		dragStart = { x: event.clientX, y: event.clientY };
 		dragLast = { x: event.clientX, y: event.clientY };
 		dragMoved = 0;
-		// Stop any in-progress spin so the drag tracks the cursor 1:1.
 		angVel.set(0, 0, 0);
 		velPxX = velPxY = 0;
 		lastMoveT = performance.now();
@@ -671,33 +834,13 @@
 			const dx = event.clientX - dragLast.x;
 			const dy = event.clientY - dragLast.y;
 			dragLast = { x: event.clientX, y: event.clientY };
-			dragMoved += Math.abs(event.clientX - dragStart.x) + Math.abs(event.clientY - dragStart.y);
+			dragMoved +=
+				Math.abs(event.clientX - dragStart.x) + Math.abs(event.clientY - dragStart.y);
 			if (dragMoved > DRAG_THRESHOLD_PX) {
-				// Trackball rotation. Build a single delta quaternion for
-				// this drag step whose axis lies in the screen plane and
-				// is perpendicular to the drag vector, then *pre-*multiply
-				// it onto userQuat. Pre-multiplying applies the rotation
-				// in world space (around screen-aligned axes) rather than
-				// in the stack's local frame, which is the trick that
-				// lets a horizontal flick keep working even after the
-				// stack has been pitched all the way "over the top".
-				//
-				// Axis derivation: the camera looks down -Z, so screen
-				// +X = world +X and screen +Y = world -Y (because dy in
-				// browser coords grows downward). The drag vector in
-				// world coords is therefore (dx, -dy, 0), and the
-				// trackball axis is +Z × drag = (dy, dx, 0) (un-norm).
-				// For a pure horizontal drag this is +Y (yaw), and for
-				// a pure vertical drag this is +X (pitch) — matching
-				// the direction of the original Euler scheme exactly,
-				// while combinations now sweep a continuous family of
-				// in-screen-plane axes.
-				const lenSq = dx * dx + dy * dy;
-				if (lenSq > 0) {
-					const len = Math.sqrt(lenSq);
-					_axis.set(dy / len, dx / len, 0);
-					_qDelta.setFromAxisAngle(_axis, len * ROT_SENSITIVITY);
-					userQuat.premultiply(_qDelta);
+				if (dx !== 0 || dy !== 0) {
+					lockedYaw += dx * ROT_SENSITIVITY;
+					lockedPitch += dy * ROT_SENSITIVITY;
+					applyLockedRotation();
 					rotationAtDefault = false;
 				}
 				canvasEl.style.cursor = 'grabbing';
@@ -705,7 +848,6 @@
 			}
 			return;
 		}
-		// Hover feedback: pointer over interactables, grab elsewhere.
 		if (!camera) return;
 		setPointerFromEvent(event);
 		raycaster.setFromCamera(pointer, camera);
@@ -718,7 +860,6 @@
 		dragging = false;
 		canvasEl.releasePointerCapture(event.pointerId);
 		if (dragMoved <= DRAG_THRESHOLD_PX) {
-			// Short press without drag → click action.
 			handleClick(event);
 			angVel.set(0, 0, 0);
 		} else {
@@ -733,9 +874,6 @@
 	}
 
 	function onContextMenu(event: MouseEvent) {
-		// Right-click resets the hovered cell on the active page. Suppress
-		// the native menu either way so right-click never surfaces a menu
-		// over the canvas.
 		event.preventDefault();
 		resetCellAt(event);
 	}
@@ -747,19 +885,10 @@
 		const dt = Math.min(0.06, (now - lastFrameT) / 1000);
 		lastFrameT = now;
 
-		// Apply angular momentum every frame. There is no friction — the
-		// stack keeps spinning until the user grabs it again. With the
-		// quaternion representation there are no clamps on either axis:
-		// vertical flicks can sail "over the top" and horizontal flicks
-		// continue to wrap freely, in any combination. We integrate by
-		// constructing a delta quaternion from the current ω·axis vector
-		// and pre-multiplying it onto the orientation, mirroring the
-		// world-space convention used during direct drag.
-		const speed = angVel.length();
-		if (speed > 0) {
-			_axis.copy(angVel).divideScalar(speed);
-			_qDelta.setFromAxisAngle(_axis, speed * dt);
-			userQuat.premultiply(_qDelta);
+		if (angVel.x !== 0 || angVel.y !== 0) {
+			lockedPitch += angVel.x * dt;
+			lockedYaw += angVel.y * dt;
+			applyLockedRotation();
 			if (rotationAtDefault) rotationAtDefault = false;
 		}
 
@@ -790,8 +919,8 @@
 		camera.position.set(0, 0, 18);
 		camera.lookAt(0, 0, 0);
 
-		texPos = makeCellTexture('#4ade80', '+', '#0c1226');
-		texNeg = makeCellTexture('#ef4444', '−', '#fff5f1');
+		// Cell textures are materialised lazily by `getCellTexture()` as
+		// the scene encounters non-zero values; nothing to pre-warm here.
 
 		resize();
 		buildScene();
@@ -799,8 +928,6 @@
 		animate();
 
 		window.addEventListener('resize', resize);
-		// The container is now fluid; track its size directly so the WebGL
-		// canvas follows layout changes that don't trigger a window resize.
 		resizeObs = new ResizeObserver(() => resize());
 		resizeObs.observe(containerEl);
 	});
@@ -814,9 +941,6 @@
 		canvasEl.style.width = w + 'px';
 		canvasEl.style.height = h + 'px';
 		camera.aspect = w / h;
-		// Re-solve for the camera distance whenever the canvas aspect
-		// changes, so the active page keeps occupying the target fraction
-		// of the viewport regardless of viewport size or shape.
 		fitCameraToStack(cachedPageW, cachedPageH, R);
 	}
 
@@ -825,18 +949,19 @@
 		window.removeEventListener('resize', resize);
 		resizeObs?.disconnect();
 		clearScene();
-		if (texPos) texPos.dispose();
-		if (texNeg) texNeg.dispose();
+		for (const tex of cellTextures.values()) tex.dispose();
+		cellTextures.clear();
 		if (renderer) renderer.dispose();
 	});
 
 	// === Reactivity =========================================================
 	$effect(() => {
 		const r = R;
-		const ro = rows;
-		const co = cols;
+		const M = m;
+		const N = n;
+		const P = p;
 		if (!stackGroup) return;
-		if (r !== snapR || ro !== snapRows || co !== snapCols) {
+		if (r !== snapR || M !== snapM || N !== snapN || P !== snapP) {
 			untrack(() => buildScene());
 		}
 	});
@@ -854,65 +979,26 @@
 		});
 	});
 
-	// The horizontal sliders above and below this board's canvas drive
-	// consecutive-page spacing and the gap carved around the active
-	// page; both change the worst-case stack depth so we relayout and
-	// refit the camera each time either updates.
 	$effect(() => {
 		tightGap;
 		clearance;
 		untrack(() => {
 			relayoutPagesZ();
-			// Refit so a much wider stack still fits on screen at zoom=1.
 			fitCameraToStack(cachedPageW, cachedPageH, R);
 		});
 	});
 
-	// Drives the camera's z-position from the user's zoom slider.
-	// applyZoom() multiplies baseDist (the auto-fit distance) by the
-	// log-mapped slider factor, so changing the slider is decoupled from
-	// any board-geometry refits — and zoom level is preserved across
-	// resizes, m/n/p changes, and page-spacing slider edits.
 	$effect(() => {
 		zoom;
 		untrack(() => applyZoom());
 	});
 </script>
 
-<div class="board-wrap" id={`board-${board}`} style:--hue={hue}>
-	<div class="board-header">
-		<!-- 1×3 navigation row of board labels. The active board's letter
-		     is rendered as the heading; the other two are anchor links
-		     that smooth-scroll to that board's wrap. On desktop the
-		     non-active letters are display:none, so the header looks
-		     unchanged there. -->
-		<div class="title-row">
-			{#each NAV_BOARDS as nb (nb.board)}
-				{#if nb.board === board}
-					<h3 class="title self" style:color={`oklch(0.78 0.18 ${nb.hue})`}>
-						{nb.title}
-					</h3>
-				{:else}
-					<a
-						class="title other"
-						href={`#board-${nb.board}`}
-						onclick={(e) => scrollToBoard(e, nb.board)}
-						style:color={`oklch(0.78 0.18 ${nb.hue})`}
-						aria-label={`Jump to board ${nb.title}`}
-						title={`Jump to board ${nb.title}`}
-					>
-						{nb.title}
-					</a>
-				{/if}
-			{/each}
-		</div>
-	</div>
-	<!-- Horizontal page-spacing slider, one per board. Drag right to
-	     spread consecutive pages further apart along the camera axis;
-	     drag left to compact them. Width matches the canvas so the
-	     control reads as belonging to its board. The visible text label
-	     is intentionally absent — the slider's position above the
-	     canvas plus the title/aria-label tooltip carry the meaning. -->
+<div class="board-wrap" style:--hue={HUE_NEUTRAL}>
+	<!-- Horizontal page-spacing slider. Drag right to spread consecutive
+	     pages further apart along the camera axis; drag left to compact
+	     them. Width matches the canvas so the control reads as belonging
+	     to the board. -->
 	<label class="h-slider-row">
 		<input
 			type="range"
@@ -921,16 +1007,19 @@
 			max="1.4"
 			step="0.01"
 			bind:value={tightGap}
-			aria-label={`Page spacing for board ${title}`}
-			title={`Page spacing for board ${title} — drag right to spread consecutive pages further apart, left to pack them tighter`}
+			aria-label="Page spacing"
+			title="Page spacing — drag right to spread consecutive pages further apart, left to pack them tighter"
 		/>
 	</label>
 	<div class="canvas-row">
-		<!-- Vertical page picker. Top of the slider = page 0 (closest to
-		     the camera), bottom = page R-1 (farthest). Tied one-way to
-		     activePage so external page changes (tab clicks, wheel,
-		     page-spacing slider edits) keep it in sync. Available on
-		     both desktop and mobile. -->
+		<!-- Vertical page picker. The slider is rendered bottom-up
+		     (see `.v-slider { direction: rtl }`): bottom of the
+		     slider = page 0 (closest to the camera), top of the
+		     slider = page R-1 (farthest). The colored fill grows
+		     from the bottom up, representing how deep into the
+		     stack you've advanced. Tied one-way to activePage so
+		     external page changes (tab clicks, wheel, page-spacing
+		     slider edits) keep it in sync. -->
 		<input
 			type="range"
 			class="v-slider page-slider"
@@ -939,7 +1028,7 @@
 			step="1"
 			value={activePage}
 			oninput={(e) => setActive(Number((e.currentTarget as HTMLInputElement).value))}
-			aria-label={`Active page on board ${title}`}
+			aria-label="Active page"
 			aria-valuetext={`Page ${activePage + 1} of ${R}`}
 			title={`Active page ${activePage + 1} of ${R}`}
 		/>
@@ -955,7 +1044,7 @@
 				onpointerleave={() => {
 					canvasEl.style.cursor = 'default';
 				}}
-				aria-label={`Board ${title}, 3D rank-page stack. Active page ${activePage + 1} of ${R}.`}
+				aria-label={`Combined A/B/C board, 3D rank-page stack. Active page ${activePage + 1} of ${R}.`}
 			></canvas>
 			{#if !rotationAtDefault || zoom !== 50 || tightGap !== DEFAULT_TIGHT_GAP || clearance !== DEFAULT_CLEARANCE}
 				<button
@@ -969,11 +1058,8 @@
 			{/if}
 			<!-- Always-visible badge in the bottom-left of the canvas
 			     showing which page (rank-1 outer-product layer) is
-			     currently active in this board's stack. Mirrors the
-			     position and styling of the .reset-view button in the
-			     opposite corner so the two overlays read as a pair.
-			     Pure read-out — page selection happens via the vertical
-			     slider on the left of the canvas, mouse wheel, etc. -->
+			     currently active. Pure read-out — page selection
+			     happens via the vertical slider, mouse wheel, etc. -->
 			{#if R > 0}
 				<div
 					class="page-indicator"
@@ -984,11 +1070,14 @@
 				</div>
 			{/if}
 		</div>
-		<!-- Vertical zoom slider, mirrored on the right of the canvas.
-		     Top = factor 0.25× (zoomed in, biggest active page); middle
-		     = factor 1× (auto-fit, the default); bottom = factor 4×
-		     (zoomed out, all pages visible). Available on both desktop
-		     and mobile. -->
+		<!-- Vertical zoom slider. Same bottom-up fill direction as
+		     the page picker: bottom = slider value 0 = factor 4×
+		     (zoomed out, all pages visible); middle = factor 1×
+		     (auto-fit, the default); top = slider value 100 =
+		     factor 0.25× (zoomed in, biggest active page). The
+		     colored fill represents "how much zoom-in is dialled
+		     in", growing upward from the bottom as you drag the
+		     thumb up to magnify. -->
 		<input
 			type="range"
 			class="v-slider zoom-slider"
@@ -997,18 +1086,15 @@
 			step="1"
 			value={zoom}
 			oninput={(e) => (zoom = Number((e.currentTarget as HTMLInputElement).value))}
-			aria-label={`Zoom for board ${title}`}
+			aria-label="Zoom"
 			aria-valuetext={`${(zoomFactor(zoom) * 100).toFixed(0)}% of auto-fit distance`}
 			title={`Zoom (${zoomFactor(zoom).toFixed(2)}×; drag up to zoom in, down to zoom out)`}
 		/>
 	</div>
-	<!-- Horizontal active-page-clearance slider, one per board. Drag
-	     right to widen the symmetric gap carved out in front of and
-	     behind the active page (so it stays visible even when the
-	     consecutive-page spacing is packed tight); drag left to close
-	     the gap. Visible text label is intentionally absent — the
-	     slider's position below the canvas plus the title/aria-label
-	     tooltip carry the meaning. -->
+	<!-- Horizontal active-page-clearance slider. Drag right to widen
+	     the symmetric gap carved out in front of and behind the active
+	     page (so it stays visible even when the consecutive-page
+	     spacing is packed tight); drag left to close the gap. -->
 	<label class="h-slider-row">
 		<input
 			type="range"
@@ -1017,49 +1103,24 @@
 			max="10"
 			step="0.05"
 			bind:value={clearance}
-			aria-label={`Active page clearance for board ${title}`}
-			title={`Active-page clearance for board ${title} — symmetric gap carved out in front of and behind the active page`}
+			aria-label="Active page clearance"
+			title="Active-page clearance — symmetric gap carved out in front of and behind the active page"
 		/>
 	</label>
 </div>
 
 <style>
 	.board-wrap {
+		/* Fill the parent panel (Game.svelte's .boards.panel) so the
+		   canvas + slider rails stretch out edge-to-edge instead of
+		   shrinking to their content's intrinsic width. */
+		width: 100%;
 		display: flex;
 		flex-direction: column;
 		align-items: center;
 		gap: 0.5rem;
 	}
-	.board-header {
-		display: flex;
-		flex-direction: column;
-		align-items: center;
-		line-height: 1.1;
-	}
-	.title-row {
-		display: flex;
-		align-items: baseline;
-		gap: 0.6rem;
-	}
-	.title {
-		font-size: 1.4rem;
-		font-weight: 700;
-		letter-spacing: 0.06em;
-		text-shadow: 0 0 18px color-mix(in oklch, currentColor 60%, transparent);
-		margin: 0;
-	}
-	.title.other {
-		/* Hidden on desktop — the active title alone is enough there.
-		   Revealed on mobile by the `(max-width: 540px)` block below as
-		   a smaller, link-styled jump-to-board control. */
-		display: none;
-		text-decoration: none;
-	}
 	.canvas-row {
-		/* `--hue` is set inline per board (A=blue/230, B=pink/340,
-		   C=amber/45) and read by both the canvas-container chrome and
-		   the page/zoom sliders' accent-color, so each slider matches
-		   the board it belongs to. */
 		--hue: 220;
 		display: flex;
 		align-items: stretch;
@@ -1067,33 +1128,29 @@
 		width: 100%;
 		justify-content: center;
 	}
-	/* Shared vertical slider styling used by both the page-picker on
-	   the left and the zoom slider on the right. Visible at every
-	   viewport size — desktop and mobile both. */
 	.v-slider {
 		display: block;
 		margin: 0;
 		padding: 0;
 		width: 28px;
-		/* Stretch to the canvas height. The row is `align-items:
-		   stretch`, but a vertical <input> still needs an explicit
-		   height: 100% in some engines for the track to fill. */
 		align-self: stretch;
 		height: auto;
-		/* Standards-track vertical orientation. Honoured by Chromium
-		   ≥111, Firefox, and Safari ≥17.4 — i.e. every engine we
-		   actively target. We previously also set the non-standard
-		   `appearance: slider-vertical`, but Chromium has flagged
-		   that keyword for removal (DevTools warns: "the keyword
-		   'slider-vertical' specified to an 'appearance' property
-		   is not standardized") so it's now omitted. The slider's
-		   value-axis runs from min (top) to max (bottom), which
-		   matches the per-slider top/bottom comments in the markup
-		   above. */
+		/* Standards-track vertical orientation. With the default
+		   `direction: ltr` this would put the slider's min at the
+		   top and max at the bottom, so the colored "accent-color"
+		   fill would grow from the top down — visually weird,
+		   since it reads as the slider being "drained from the
+		   top". `direction: rtl` reverses the inline axis so min
+		   sits at the bottom and max at the top, and the fill now
+		   grows from the bottom up like a fuel gauge or
+		   thermometer. The page-slider's value mapping (page 0 at
+		   bottom, page R-1 at top) and the inverted zoomFactor()
+		   together keep the on-screen meaning intuitive — "more
+		   fill = further into the stack" on the page slider, and
+		   "more fill = more zoomed in" on the zoom slider. */
 		writing-mode: vertical-lr;
+		direction: rtl;
 		accent-color: oklch(0.7 0.18 var(--hue));
-		/* Prevent the page from scrolling while the user drags the
-		   slider thumb on a touchscreen. */
 		touch-action: none;
 		cursor: ns-resize;
 		background: transparent;
@@ -1104,19 +1161,16 @@
 		border-radius: 4px;
 	}
 
-	/* Horizontal "Page spacing" / "Clearance" sliders that sit above
-	   and below this board's canvas. Width is sized to match the
-	   canvas — the canvas-row reserves 2 × (28px slider + 0.45rem gap)
-	   for the vertical sliders, so we subtract the same here. The
-	   max-width caps the slider once the canvas itself caps at 580px
-	   on wide viewports, keeping the two visually flush even when the
-	   board-wrap is wider than the active canvas+sliders block. */
 	.h-slider-row {
 		display: flex;
 		align-items: center;
 		gap: 0.5rem;
+		/* The 28px (v-slider width) + 0.45rem (canvas-row gap) on
+		   each side aligns the horizontal slider rail with the
+		   canvas's left/right edges (the v-sliders sit outside it
+		   in .canvas-row). No max-width — the rail tracks the
+		   canvas, which is now governed by the parent panel. */
 		width: calc(100% - 2 * (28px + 0.45rem));
-		max-width: 580px;
 		font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
 		font-size: 0.7rem;
 		color: rgb(148 163 184);
@@ -1126,9 +1180,6 @@
 		min-width: 0;
 		accent-color: oklch(0.7 0.18 var(--hue));
 		cursor: ew-resize;
-		/* Allow vertical page scrolling on touch even if the user's
-		   finger lands on the slider track — only horizontal drags
-		   should be captured by the input. */
 		touch-action: pan-y;
 	}
 	.h-slider:focus-visible {
@@ -1137,8 +1188,12 @@
 		border-radius: 4px;
 	}
 	.canvas-container {
+		/* Fill whatever width the parent .board-wrap (in turn
+		   governed by Game.svelte's .boards.panel) gives us — the
+		   panel is 1/2 page wide and itself capped by the page's
+		   max-width, so a hard cap here would just leave dead
+		   space inside the panel on wide viewports. */
 		width: 100%;
-		max-width: 580px;
 		min-width: 240px;
 		aspect-ratio: 1 / 1;
 		border-radius: 14px;
@@ -1177,11 +1232,6 @@
 		background: oklch(0.28 0.05 var(--hue) / 0.9);
 		border-color: oklch(0.6 0.14 var(--hue));
 	}
-	/* Mirror of .reset-view in the opposite corner. Same chrome (size,
-	   font, blurred translucent fill, hue-tinted border) so the two
-	   overlays look like siblings; positioned bottom-left instead of
-	   top-right. Non-interactive — `pointer-events: none` ensures the
-	   badge never steals a click/drag meant for the canvas. */
 	.page-indicator {
 		position: absolute;
 		bottom: 8px;
@@ -1200,62 +1250,10 @@
 	}
 
 	@media (max-width: 540px) {
-		/* Drop the desktop min-width on phones. With page + card padding
-		   the available column on a 320–375px viewport can be narrower
-		   than 240px, which would otherwise force the square canvas to
-		   overflow and trigger horizontal scrolling. The aspect-ratio
-		   rule still keeps the canvas square at whatever width fits. */
 		.canvas-container {
 			min-width: 0;
-			/* Belt-and-suspenders: clip anything inside that briefly
-			   exceeds the container before THREE's resize handler runs
-			   so the boards card never gets pushed off-screen. */
 			overflow: hidden;
 		}
-
-		/* Mobile-only "1×3 jump table" in each board's header — the
-		   active board's letter remains the heading, the other two
-		   become anchor links to the corresponding boards' wraps. Each
-		   link wears its destination board's hue so users can build a
-		   colour-to-board mental map. */
-		.title-row {
-			display: grid;
-			grid-template-columns: repeat(3, minmax(1.6rem, auto));
-			gap: 1.1rem;
-			justify-content: center;
-			align-items: baseline;
-		}
-		.title.other {
-			display: inline-block;
-			font-size: 1.05rem;
-			font-weight: 600;
-			letter-spacing: 0.06em;
-			opacity: 0.55;
-			text-align: center;
-			text-decoration: underline;
-			text-decoration-thickness: 1px;
-			text-underline-offset: 4px;
-			cursor: pointer;
-			transition:
-				opacity 120ms ease,
-				text-decoration-thickness 120ms ease;
-		}
-		.title.other:hover,
-		.title.other:focus-visible {
-			opacity: 1;
-			text-decoration-thickness: 2px;
-		}
-		.title.other:focus-visible {
-			outline: 2px solid currentColor;
-			outline-offset: 4px;
-			border-radius: 4px;
-		}
-
-		/* The canvas element starts at the HTML5 default 300×150 before
-		   our onMount resize() runs. On a narrow viewport that default
-		   would temporarily exceed its parent and inflate the grid
-		   track. Cap it at 100% width so the canvas stays inside its
-		   container even during that one-frame initial flash. */
 		canvas {
 			max-width: 100%;
 			height: auto;

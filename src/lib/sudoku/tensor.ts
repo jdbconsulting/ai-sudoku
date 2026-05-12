@@ -10,7 +10,18 @@
 //   u_r is reshaped as Board A page r (m x n)
 //   v_r is reshaped as Board B page r (n x p)
 //   w_r is reshaped as Board C page r (m x p)
-// Cells live in {-1, 0, 1}.
+// Cells live in some `Alphabet` (see alphabets.ts) — by default
+// {-1, 0, +1}, optionally extended to half-integer or ±2 worlds. The
+// math in here only sees numeric cell values; the alphabet itself is
+// only consulted at the input layer (UI, server validation, JSON
+// (de)serialization).
+//
+// IMPORTANT: this module is symlinked into infra/api/tensor.ts so the
+// Lambda recomputes scores with the exact same formulas the client
+// uses. Keep it dependency-free (no `import ... from './state'`-style
+// circular paths) and don't import any non-trivial helpers from
+// alphabets.ts that could pull in browser-only code — the file must
+// continue to bundle into Lambda via esbuild without any extra config.
 
 export type Mnp = { m: number; n: number; p: number; R: number };
 
@@ -33,8 +44,13 @@ export function sizeC(m: number, p: number) {
 	return m * p;
 }
 
-// Flat index helpers. All boards are stored as a flat Int8Array of length R * page,
-// laid out [page0, page1, ..., page_{R-1}], each page row-major.
+// Flat index helpers. All boards are stored as a flat Float32Array of
+// length R * page, laid out [page0, page1, ..., page_{R-1}], each page
+// row-major. Float32 (rather than Int8) so the half-integer alphabets
+// can store ±½ exactly; Float64 would be overkill since every supported
+// alphabet value is a small dyadic rational well inside f32's exact
+// range, and Float32 keeps memory cost low (≈ 67 KB per board at the
+// player-facing ⟨7,7,7⟩ ceiling).
 export function flatA(m: number, n: number, r: number, i: number, j: number) {
 	return r * m * n + i * n + j;
 }
@@ -45,16 +61,21 @@ export function flatC(m: number, p: number, r: number, i: number, k: number) {
 	return r * m * p + i * p + k;
 }
 
-// Build the target matmul tensor T as a flat Int8Array of length (m*n)*(n*p)*(m*p).
+// Build the target matmul tensor T as a flat Float32Array of length
+// (m*n)*(n*p)*(m*p). Float32 (not Int8) so the type lines up with the
+// boards — `computeResidual` initialises the residual buffer from T
+// and we want a single numeric path through all of it. T's entries
+// are always exactly 0 or 1, so the choice of float vs int makes no
+// numerical difference.
 // Layout: T[((a * (n*p)) + b) * (m*p) + c]
 //   a in [0, m*n) decoded as (i, j)
 //   b in [0, n*p) decoded as (k, l)
 //   c in [0, m*p) decoded as (s, t)
-export function computeTargetTensor(m: number, n: number, p: number): Int8Array {
+export function computeTargetTensor(m: number, n: number, p: number): Float32Array {
 	const sa = m * n;
 	const sb = n * p;
 	const sc = m * p;
-	const T = new Int8Array(sa * sb * sc);
+	const T = new Float32Array(sa * sb * sc);
 	for (let i = 0; i < m; i++) {
 		for (let j = 0; j < n; j++) {
 			for (let l = 0; l < p; l++) {
@@ -71,19 +92,26 @@ export function computeTargetTensor(m: number, n: number, p: number): Int8Array 
 
 // Compute the residual tensor Γ = T - sum_r flat(A_r) (x) flat(B_r) (x) flat(C_r).
 // The "ideal" answer makes Γ identically zero.
+//
+// Residual is Float64 (not Int32 as in the {-1,0,1}-only era) so the
+// half-integer alphabets (e.g. {−1, −½, 0, +½, +1}) can express the
+// product `½ · ½ · ½ = 1/8` exactly. Every supported alphabet value is
+// a dyadic rational with a small denominator, so every sum of products
+// is representable in f64 without rounding — `Γ === 0` remains a
+// reliable "solved" test.
 export function computeResidual(
 	mnp: Mnp,
-	A: Int8Array,
-	B: Int8Array,
-	C: Int8Array,
-	T: Int8Array
-): Int32Array {
+	A: Float32Array,
+	B: Float32Array,
+	C: Float32Array,
+	T: Float32Array
+): Float64Array {
 	const { m, n, p, R } = mnp;
 	const sa = m * n;
 	const sb = n * p;
 	const sc = m * p;
 	const total = sa * sb * sc;
-	const G = new Int32Array(total);
+	const G = new Float64Array(total);
 	for (let i = 0; i < total; i++) G[i] = T[i];
 
 	for (let r = 0; r < R; r++) {
@@ -109,13 +137,13 @@ export function computeResidual(
 	return G;
 }
 
-export function countNonzero(G: Int32Array): number {
+export function countNonzero(G: Float64Array): number {
 	let n = 0;
 	for (let i = 0; i < G.length; i++) if (G[i] !== 0) n++;
 	return n;
 }
 
-export function maxAbs(G: Int32Array): number {
+export function maxAbs(G: Float64Array): number {
 	let m = 0;
 	for (let i = 0; i < G.length; i++) {
 		const v = G[i] < 0 ? -G[i] : G[i];
@@ -124,11 +152,17 @@ export function maxAbs(G: Int32Array): number {
 	return m;
 }
 
-// L1 norm of the residual: Σ |Γ_i|. This is the number of naive ±1·±1·±1
-// rank-1 terms a player would have to append to the decomposition to drive
-// the residual to zero (since cells live in {-1, 0, 1}, each unit of error
-// at a single position requires one such patch term).
-export function sumAbs(G: Int32Array): number {
+// L1 norm of the residual: Σ |Γ_i|. Read as "how far the boards are
+// from a valid decomposition" — drives toward zero when the player
+// solves the puzzle. Historically the doc here called this the "naive
+// ±1 patch cost", but that interpretation is alphabet-dependent (a
+// {0, +1}-only alphabet can't even represent a single ±1 rank-1 patch),
+// so we now treat it purely as a residual magnitude. Effective rank
+// still adds this number to `ranksUsed` because every unit of residual
+// represents some amount of un-paid rank — the exact conversion isn't
+// crisp for non-trivial alphabets, but it preserves the desirable
+// monotonicity property that "less residual = better score".
+export function sumAbs(G: Float64Array): number {
 	let s = 0;
 	for (let i = 0; i < G.length; i++) {
 		s += G[i] < 0 ? -G[i] : G[i];
@@ -138,7 +172,12 @@ export function sumAbs(G: Int32Array): number {
 
 // Number of independent ranks used (a rank slot is "used" when any of its
 // A/B/C pages contains a non-zero element).
-export function ranksUsed(mnp: Mnp, A: Int8Array, B: Int8Array, C: Int8Array): number {
+export function ranksUsed(
+	mnp: Mnp,
+	A: Float32Array,
+	B: Float32Array,
+	C: Float32Array
+): number {
 	const { m, n, p, R } = mnp;
 	const sa = m * n;
 	const sb = n * p;
@@ -156,13 +195,15 @@ export function ranksUsed(mnp: Mnp, A: Int8Array, B: Int8Array, C: Int8Array): n
 
 // Pre-load the trivial standard algorithm: rank slot indexed by (i, j, l)
 // computes the contribution A_{i,j} * B_{j,l} -> C_{i,l}. Returns null if R is
-// too small to fit the full m*n*p ranks.
-export function loadStandardAlgorithm(mnp: Mnp): { A: Int8Array; B: Int8Array; C: Int8Array } | null {
+// too small to fit the full m*n*p ranks. All coefficients are 0/1, so the
+// schoolbook is representable in every supported alphabet (every alphabet
+// contains 0 and at least one of ±1).
+export function loadStandardAlgorithm(mnp: Mnp): { A: Float32Array; B: Float32Array; C: Float32Array } | null {
 	const { m, n, p, R } = mnp;
 	if (R < m * n * p) return null;
-	const A = new Int8Array(R * m * n);
-	const B = new Int8Array(R * n * p);
-	const C = new Int8Array(R * m * p);
+	const A = new Float32Array(R * m * n);
+	const B = new Float32Array(R * n * p);
+	const C = new Float32Array(R * m * p);
 	let r = 0;
 	for (let i = 0; i < m; i++) {
 		for (let j = 0; j < n; j++) {
@@ -236,14 +277,14 @@ export function computeScore(omega: number): number {
 }
 
 // Strassen's rank-7 algorithm for <2, 2, 2>. Returns null when not applicable.
-export function loadStrassen(mnp: Mnp): { A: Int8Array; B: Int8Array; C: Int8Array } | null {
+export function loadStrassen(mnp: Mnp): { A: Float32Array; B: Float32Array; C: Float32Array } | null {
 	const { m, n, p, R } = mnp;
 	if (m !== 2 || n !== 2 || p !== 2 || R < 7) return null;
 	// Index helpers for 2x2: pos(i,j) = i*2 + j
 	const pos = (i: number, j: number) => i * 2 + j;
-	const A = new Int8Array(R * 4);
-	const B = new Int8Array(R * 4);
-	const C = new Int8Array(R * 4);
+	const A = new Float32Array(R * 4);
+	const B = new Float32Array(R * 4);
+	const C = new Float32Array(R * 4);
 
 	// Strassen products M1..M7. (a_ij, b_ij, contributing c_ij as a sum/diff.)
 	// M1 = (a11+a22)(b11+b22) -> +c11, +c22

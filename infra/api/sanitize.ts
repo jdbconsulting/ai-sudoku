@@ -67,9 +67,18 @@ export type SubmissionPayload = {
 	m: number;
 	n: number;
 	p: number;
-	A: Int8Array;
-	B: Int8Array;
-	C: Int8Array;
+	// Strict-increasing list including 0; the values cells of A/B/C
+	// were restricted to. Validated against a hard ceiling on size
+	// and magnitude so a crafted payload can't bypass alphabet
+	// validation by claiming an alphabet with thousands of entries.
+	alphabet: number[];
+	// Float32Arrays (rather than Int8Arrays as in the {−1,0,1}-only
+	// era) so the half-integer / ±2 alphabets can flow through the
+	// same code path. Every supported alphabet value is a small
+	// dyadic rational that round-trips through f32 without loss.
+	A: Float32Array;
+	B: Float32Array;
+	C: Float32Array;
 };
 
 export class ValidationError extends Error {
@@ -90,11 +99,21 @@ function asDim(name: string, raw: unknown): number {
 	return raw;
 }
 
-// Convert a JSON array of cell values into a typed Int8Array, validating
-// length and that every entry is one of {-1, 0, 1}. Cells outside that
-// alphabet would let a clever submitter "cheat" by encoding extra
-// information in single cells, which the score formula doesn't anticipate.
-function asBoard(name: string, raw: unknown, expectedLen: number): Int8Array {
+// Convert a JSON array of cell values into a typed Float32Array,
+// validating length and that every entry is in the claimed alphabet.
+// Cells outside the alphabet would let a clever submitter "cheat" by
+// encoding extra information in single cells (the score formula doesn't
+// anticipate them and the residual could be driven to zero in ways the
+// player-facing search wouldn't allow). Storing as Float32 keeps the
+// math in lock-step with the frontend's Float32 boards — every
+// supported alphabet value is a small dyadic rational that round-trips
+// through f32 without rounding.
+function asBoard(
+	name: string,
+	raw: unknown,
+	expectedLen: number,
+	alphabet: number[]
+): Float32Array {
 	if (!Array.isArray(raw)) {
 		throw new ValidationError(`${name} must be an array`);
 	}
@@ -103,15 +122,76 @@ function asBoard(name: string, raw: unknown, expectedLen: number): Int8Array {
 			`${name} has wrong length: expected ${expectedLen}, got ${raw.length}`
 		);
 	}
-	const out = new Int8Array(expectedLen);
+	const out = new Float32Array(expectedLen);
 	for (let i = 0; i < expectedLen; i++) {
 		const v = raw[i];
-		if (v !== -1 && v !== 0 && v !== 1) {
-			throw new ValidationError(`${name}[${i}] must be -1, 0, or 1 (got ${JSON.stringify(v)})`);
+		if (typeof v !== 'number' || !Number.isFinite(v)) {
+			throw new ValidationError(
+				`${name}[${i}] must be a finite number (got ${JSON.stringify(v)})`
+			);
+		}
+		if (!alphabet.includes(v)) {
+			throw new ValidationError(
+				`${name}[${i}] = ${v} is not in the declared alphabet`
+			);
 		}
 		out[i] = v;
 	}
 	return out;
+}
+
+// Maximum allowed alphabet length. Capped low so a payload can't
+// claim an absurd alphabet with thousands of values just to slip cells
+// through the per-cell `includes` check. The shipped frontend
+// alphabets max out at 7 entries; doubling that as a ceiling leaves
+// room for future experimental additions without being a vector for
+// abuse.
+const MAX_ALPHABET = 16;
+
+// Cap individual alphabet values so a submitter can't claim an
+// alphabet containing 10²⁰ and use it to construct a tiny-rank
+// "algorithm" that scores enormously well in the residual-magnitude
+// metric. Real factor entries in published matmul algorithms (Strassen,
+// Bini, AlphaTensor, Smirnov, half-integer ε-border-rank constructions)
+// all live comfortably inside [-2, +2] for the alphabets we ship; this
+// ceiling matches that and rejects anything noticeably out of band.
+const MAX_ALPHABET_VALUE = 2;
+
+function asAlphabet(raw: unknown): number[] {
+	if (raw === undefined) {
+		// Pre-feature clients (and the SDK's resize-to-default path)
+		// don't send an alphabet field. Fall back to the historical
+		// {−1, 0, +1} default so existing automation keeps working.
+		return [-1, 0, 1];
+	}
+	if (!Array.isArray(raw)) {
+		throw new ValidationError('alphabet must be an array of numbers');
+	}
+	if (raw.length < 2 || raw.length > MAX_ALPHABET) {
+		throw new ValidationError(
+			`alphabet must have between 2 and ${MAX_ALPHABET} values (got ${raw.length})`
+		);
+	}
+	const arr: number[] = [];
+	for (let i = 0; i < raw.length; i++) {
+		const v = raw[i];
+		if (typeof v !== 'number' || !Number.isFinite(v)) {
+			throw new ValidationError(`alphabet[${i}] must be a finite number`);
+		}
+		if (Math.abs(v) > MAX_ALPHABET_VALUE) {
+			throw new ValidationError(
+				`alphabet[${i}] = ${v} exceeds the |v| ≤ ${MAX_ALPHABET_VALUE} bound`
+			);
+		}
+		arr.push(v);
+		if (i > 0 && !(arr[i] > arr[i - 1])) {
+			throw new ValidationError('alphabet must be strictly increasing');
+		}
+	}
+	if (!arr.includes(0)) {
+		throw new ValidationError('alphabet must contain 0');
+	}
+	return arr;
 }
 
 export function parseSubmission(body: unknown): SubmissionPayload {
@@ -123,14 +203,15 @@ export function parseSubmission(body: unknown): SubmissionPayload {
 	const m = asDim('m', obj.m);
 	const n = asDim('n', obj.n);
 	const p = asDim('p', obj.p);
+	const alphabet = asAlphabet(obj.alphabet);
 	// R is fixed to m·n·p in the game (the player lowers the *effective*
 	// rank by leaving pages blank). We don't accept a client-supplied R —
 	// any value would either match this or be a bug.
 	const R = m * n * p;
-	const A = asBoard('A', obj.A, R * m * n);
-	const B = asBoard('B', obj.B, R * n * p);
-	const C = asBoard('C', obj.C, R * m * p);
-	return { username, m, n, p, A, B, C };
+	const A = asBoard('A', obj.A, R * m * n, alphabet);
+	const B = asBoard('B', obj.B, R * n * p, alphabet);
+	const C = asBoard('C', obj.C, R * m * p, alphabet);
+	return { username, m, n, p, alphabet, A, B, C };
 }
 
 // ---------------------------------------------------------------------------

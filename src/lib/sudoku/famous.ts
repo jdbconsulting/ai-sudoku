@@ -367,20 +367,21 @@ export function findFamousAlgorithm(id: string): FamousAlgorithm | null {
 // Build & verify
 // ---------------------------------------------------------------------------
 
-// Materialise the spec into the same flat Int8Array layout that GameState
-// uses internally. Buffers are sized for the schoolbook m·n·p slots; only
-// the first R slots are populated, leaving the trailing pages zero-filled
-// so the player sees a "fewer pages used" board straight away.
+// Materialise the spec into the same flat Float32Array layout that
+// GameState uses internally. Buffers are sized for the schoolbook
+// m·n·p slots; only the first R slots are populated, leaving the
+// trailing pages zero-filled so the player sees a "fewer pages used"
+// board straight away.
 export function buildFactors(alg: FamousAlgorithm): {
-	A: Int8Array;
-	B: Int8Array;
-	C: Int8Array;
+	A: Float32Array;
+	B: Float32Array;
+	C: Float32Array;
 } {
 	const { m, n, p, R, terms } = alg;
 	const slots = m * n * p;
-	const A = new Int8Array(slots * m * n);
-	const B = new Int8Array(slots * n * p);
-	const C = new Int8Array(slots * m * p);
+	const A = new Float32Array(slots * m * n);
+	const B = new Float32Array(slots * n * p);
+	const C = new Float32Array(slots * m * p);
 	for (let r = 0; r < R; r++) {
 		const t = terms[r];
 		for (const [i, j, v] of t.a) A[r * (m * n) + i * n + j] = v;

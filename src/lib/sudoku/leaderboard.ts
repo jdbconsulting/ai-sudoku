@@ -10,6 +10,7 @@
 
 import { env } from '$env/dynamic/public';
 import type { GameState } from './state.svelte';
+import { DEFAULT_ALPHABET, type Alphabet } from './alphabets';
 
 // Read at module load. SvelteKit replaces `$env/dynamic/public.PUBLIC_*`
 // at build/runtime depending on adapter; for adapter-static this is
@@ -35,6 +36,11 @@ export type LeaderboardEntry = {
 	score: number;
 	solved: boolean;
 	submittedAt: string;
+	// Alphabet the entry was authored in. Optional on the wire so
+	// rows submitted before the alphabet feature existed still
+	// deserialise — those get the classical {−1, 0, +1} default on
+	// the client side (see `entryAlphabet()` below).
+	alphabet?: number[];
 };
 
 // Full record including the original boards — fetched on demand when
@@ -45,6 +51,14 @@ export type FullScore = LeaderboardEntry & {
 	B: number[];
 	C: number[];
 };
+
+// Pull the alphabet out of a leaderboard row, defaulting to the
+// classical {−1, 0, +1} when absent. Use this in every UI path that
+// renders / replays an entry so old rows can't crash the player who
+// happened to click them.
+export function entryAlphabet(e: LeaderboardEntry): Alphabet {
+	return e.alphabet && e.alphabet.length > 0 ? e.alphabet : DEFAULT_ALPHABET;
+}
 
 export type SubmitResult = LeaderboardEntry;
 
@@ -101,15 +115,20 @@ export async function submitScore(
 	if (!apiEnabled) {
 		throw new LeaderboardError('Leaderboard API is not configured for this build', 0);
 	}
-	// We send the raw boards as plain JSON arrays of integers. Even at
-	// max <8,8,8> this is ~10 KB compressed, well inside fetch limits.
-	// The server recomputes the score from scratch — the only thing we
-	// don't bother sending is the score itself.
+	// We send the raw boards as plain JSON arrays of numbers (every
+	// supported alphabet value is a small dyadic rational, so this
+	// fits comfortably inside JSON's number type). Even at the
+	// player-facing max ⟨7,7,7⟩ this is well inside fetch limits. The
+	// server recomputes the score from scratch — the only thing we
+	// don't bother sending is the score itself. We *do* send the
+	// alphabet so the server can reject any cell value outside the
+	// claimed world before the residual is even computed.
 	const payload = {
 		username,
 		m: game.m,
 		n: game.n,
 		p: game.p,
+		alphabet: Array.from(game.alphabet),
 		A: Array.from(game.A),
 		B: Array.from(game.B),
 		C: Array.from(game.C)
