@@ -1,11 +1,14 @@
 <script lang="ts">
 	import { onDestroy, onMount, untrack } from 'svelte';
 	import * as THREE from 'three';
-	import type { Board, CellValue, GameState } from './state.svelte';
+	import type { Board, BoardViewMode, CellValue, GameState } from './state.svelte';
 	import { formatGlyph } from './alphabets';
 
 	type Props = { game: GameState };
 	let { game }: Props = $props();
+	// Mount snapshot: each `Board3D` is created with one `GameState`; the prop is not swapped.
+	// svelte-ignore state_referenced_locally
+	const bv0 = game.boardView;
 
 	// Per-region hues. The three matrices used to be drawn on three
 	// separate canvases that each carried their own hue across the
@@ -41,8 +44,8 @@
 	// neighbours regardless of how tight the rest of the stack is packed.
 	const DEFAULT_TIGHT_GAP = 0.32;
 	const DEFAULT_CLEARANCE = 5;
-	let tightGap = $state(DEFAULT_TIGHT_GAP);
-	let clearance = $state(DEFAULT_CLEARANCE);
+	let tightGap = $state(bv0.tightGap);
+	let clearance = $state(bv0.clearance);
 
 	// === Zoom ===============================================================
 	// User-controlled camera distance, written by the right-hand vertical
@@ -59,7 +62,7 @@
 	//   slider 0   → factor 4.00× (bottom; farthest, whole stack visible)
 	//   slider 50  → factor 1.00× (default auto-fit)
 	//   slider 100 → factor 0.25× (top; closest, biggest active page)
-	let zoom = $state(50);
+	let zoom = $state(bv0.zoom);
 
 	function zoomFactor(z: number): number {
 		return Math.pow(2, (50 - z) / 25);
@@ -86,8 +89,7 @@
 	//     back to 3D restores whatever orientation the player had set.
 	//   - Drag rotation and momentum are gated on `mode === '3D'`, so a
 	//     pointer drag in 2D only ever resolves to a click (cell pick).
-	type ViewMode = '2D' | '3D';
-	let mode = $state<ViewMode>('3D');
+	let mode = $state<BoardViewMode>(bv0.mode);
 	const IDENTITY_QUAT = new THREE.Quaternion();
 
 	function toggleMode() {
@@ -786,8 +788,8 @@
 	// single pitch value in a few frames; the visual quirk disappears
 	// the moment pitch leaves ±π/2.
 	const DEFAULT_TILT_RAD = (40 * Math.PI) / 180;
-	let lockedPitch = $state(DEFAULT_TILT_RAD);
-	let lockedYaw = $state(-DEFAULT_TILT_RAD);
+	let lockedPitch = $state(bv0.lockedPitch);
+	let lockedYaw = $state(bv0.lockedYaw);
 	const _eulerHelper = new THREE.Euler(0, 0, 0, 'XYZ');
 	// userQuat is mutated in place by applyLockedRotation (called from the
 	// drag handler and the momentum integrator) and then read by `animate`
@@ -795,15 +797,19 @@
 	// the reactive driver for the reset button is `rotationAtDefault`
 	// below, which we flip whenever the orientation diverges from the
 	// default.
-	const userQuat = new THREE.Quaternion().setFromEuler(
-		_eulerHelper.set(DEFAULT_TILT_RAD, -DEFAULT_TILT_RAD, 0, 'XYZ')
-	);
-	let rotationAtDefault = $state(true);
+	const userQuat = new THREE.Quaternion();
 
 	function applyLockedRotation() {
 		_eulerHelper.set(lockedPitch, lockedYaw, 0, 'XYZ');
 		userQuat.setFromEuler(_eulerHelper);
 	}
+
+	applyLockedRotation();
+
+	let rotationAtDefault = $state(
+		Math.abs(bv0.lockedPitch - DEFAULT_TILT_RAD) < 1e-6 &&
+			Math.abs(bv0.lockedYaw + DEFAULT_TILT_RAD) < 1e-6
+	);
 
 	// Angular velocity in (pitchRate, yawRate, 0) form (rad/sec). Set by
 	// `commitMomentum` from the smoothed pointer-pixel velocity at release
@@ -1015,6 +1021,25 @@
 		camera.aspect = w / h;
 		fitCameraToStack(cachedPageW, cachedPageH, R);
 	}
+
+	$effect(() => {
+		mode;
+		zoom;
+		tightGap;
+		clearance;
+		lockedPitch;
+		lockedYaw;
+		untrack(() => {
+			game.boardView = {
+				mode,
+				zoom,
+				tightGap,
+				clearance,
+				lockedPitch,
+				lockedYaw
+			};
+		});
+	});
 
 	onDestroy(() => {
 		cancelAnimationFrame(frameId);

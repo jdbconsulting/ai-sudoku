@@ -32,6 +32,31 @@ import {
 export type CellValue = number;
 export type Board = 'A' | 'B' | 'C';
 
+/** 2D vs 3D and camera / stack UI for `Board3D`. Lives on `GameState` so a puzzle tab keeps its view when the shell switches away (see src/routes/+page.svelte `{#key activeTab.id}`) and the Game remounts. */
+export type BoardViewMode = '2D' | '3D';
+
+const DEFAULT_BOARD_TILT_RAD = (40 * Math.PI) / 180;
+
+export type BoardViewSettings = {
+	mode: BoardViewMode;
+	zoom: number;
+	tightGap: number;
+	clearance: number;
+	lockedPitch: number;
+	lockedYaw: number;
+};
+
+export function defaultBoardViewSettings(): BoardViewSettings {
+	return {
+		mode: '3D',
+		zoom: 50,
+		tightGap: 0.32,
+		clearance: 5,
+		lockedPitch: DEFAULT_BOARD_TILT_RAD,
+		lockedYaw: -DEFAULT_BOARD_TILT_RAD
+	};
+}
+
 export class GameState {
 	m = $state(2);
 	n = $state(2);
@@ -62,10 +87,9 @@ export class GameState {
 	// reactivity passes.
 	alphabet: Alphabet = $state(DEFAULT_ALPHABET);
 
-	// 3D viewing controls (page spacing & active-page clearance) live as
-	// local $state inside the Board3D component. Nothing on the
-	// game-mechanics side reads those values, so they don't belong here
-	// on GameState.
+	// Combined-board view (2D/3D, zoom, rotation, spacing). Persisted here
+	// so tab switches that unmount `Game`/`Board3D` do not reset the camera.
+	boardView = $state<BoardViewSettings>(defaultBoardViewSettings());
 
 	constructor(m = 2, n = 2, p = 2, alphabet: Alphabet = DEFAULT_ALPHABET) {
 		this.alphabet = alphabet;
