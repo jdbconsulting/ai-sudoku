@@ -170,25 +170,47 @@ export function sumAbs(G: Float64Array): number {
 	return s;
 }
 
-// Number of independent ranks used (a rank slot is "used" when any of its
-// A/B/C pages contains a non-zero element).
-export function ranksUsed(
-	mnp: Mnp,
-	A: Float32Array,
-	B: Float32Array,
-	C: Float32Array
-): number {
+// Number of independent ranks actually contributing to the decomposition.
+// A rank slot only counts when ALL THREE of its A/B/C pages contain at
+// least one non-zero element. The rank-1 outer product u_r ⊗ v_r ⊗ w_r
+// is identically the zero tensor whenever any of u_r, v_r, w_r is the
+// zero vector — such a slot is degenerate/removable and contributes
+// nothing to T, so it must not be charged against the player's rank.
+// (Counting "any page non-empty" instead would inflate R_eff for boards
+// that have, e.g., a populated A page paired with empty B and C pages,
+// even though those terms vanish from the sum and could be deleted at
+// no cost.)
+export function ranksUsed(mnp: Mnp, A: Float32Array, B: Float32Array, C: Float32Array): number {
 	const { m, n, p, R } = mnp;
 	const sa = m * n;
 	const sb = n * p;
 	const sc = m * p;
 	let used = 0;
 	for (let r = 0; r < R; r++) {
-		let any = false;
-		for (let a = 0; a < sa; a++) if (A[r * sa + a] !== 0) { any = true; break; }
-		if (!any) for (let b = 0; b < sb; b++) if (B[r * sb + b] !== 0) { any = true; break; }
-		if (!any) for (let c = 0; c < sc; c++) if (C[r * sc + c] !== 0) { any = true; break; }
-		if (any) used++;
+		// Short-circuit on the first all-zero page: no point scanning the
+		// other two if we already know the outer product is zero.
+		let aHas = false;
+		for (let a = 0; a < sa; a++)
+			if (A[r * sa + a] !== 0) {
+				aHas = true;
+				break;
+			}
+		if (!aHas) continue;
+		let bHas = false;
+		for (let b = 0; b < sb; b++)
+			if (B[r * sb + b] !== 0) {
+				bHas = true;
+				break;
+			}
+		if (!bHas) continue;
+		let cHas = false;
+		for (let c = 0; c < sc; c++)
+			if (C[r * sc + c] !== 0) {
+				cHas = true;
+				break;
+			}
+		if (!cHas) continue;
+		used++;
 	}
 	return used;
 }
@@ -204,7 +226,9 @@ export function ranksUsed(
 // build C(0,1), and so on. Walking the rank-axis slider from page 1 to page R
 // then moves through the output cells of C in row-major order, which matches
 // how a player reads the residual.
-export function loadStandardAlgorithm(mnp: Mnp): { A: Float32Array; B: Float32Array; C: Float32Array } | null {
+export function loadStandardAlgorithm(
+	mnp: Mnp
+): { A: Float32Array; B: Float32Array; C: Float32Array } | null {
 	const { m, n, p, R } = mnp;
 	if (R < m * n * p) return null;
 	const A = new Float32Array(R * m * n);
@@ -283,7 +307,9 @@ export function computeScore(omega: number): number {
 }
 
 // Strassen's rank-7 algorithm for <2, 2, 2>. Returns null when not applicable.
-export function loadStrassen(mnp: Mnp): { A: Float32Array; B: Float32Array; C: Float32Array } | null {
+export function loadStrassen(
+	mnp: Mnp
+): { A: Float32Array; B: Float32Array; C: Float32Array } | null {
 	const { m, n, p, R } = mnp;
 	if (m !== 2 || n !== 2 || p !== 2 || R < 7) return null;
 	// Index helpers for 2x2: pos(i,j) = i*2 + j
@@ -300,16 +326,21 @@ export function loadStrassen(mnp: Mnp): { A: Float32Array; B: Float32Array; C: F
 	// M5 = (a11+a12) b22      -> -c11, +c12
 	// M6 = (a21-a11)(b11+b12) -> +c22
 	// M7 = (a12-a22)(b21+b22) -> +c11
-	const products: Array<[Record<string, number>, Record<string, number>, Record<string, number>]> = [
-		// [aTerms, bTerms, cTerms] keyed by "i,j" -> coefficient
-		[{ '0,0': 1, '1,1': 1 }, { '0,0': 1, '1,1': 1 }, { '0,0': 1, '1,1': 1 }],
-		[{ '1,0': 1, '1,1': 1 }, { '0,0': 1 }, { '1,0': 1, '1,1': -1 }],
-		[{ '0,0': 1 }, { '0,1': 1, '1,1': -1 }, { '0,1': 1, '1,1': 1 }],
-		[{ '1,1': 1 }, { '1,0': 1, '0,0': -1 }, { '0,0': 1, '1,0': 1 }],
-		[{ '0,0': 1, '0,1': 1 }, { '1,1': 1 }, { '0,0': -1, '0,1': 1 }],
-		[{ '1,0': 1, '0,0': -1 }, { '0,0': 1, '0,1': 1 }, { '1,1': 1 }],
-		[{ '0,1': 1, '1,1': -1 }, { '1,0': 1, '1,1': 1 }, { '0,0': 1 }]
-	];
+	const products: Array<[Record<string, number>, Record<string, number>, Record<string, number>]> =
+		[
+			// [aTerms, bTerms, cTerms] keyed by "i,j" -> coefficient
+			[
+				{ '0,0': 1, '1,1': 1 },
+				{ '0,0': 1, '1,1': 1 },
+				{ '0,0': 1, '1,1': 1 }
+			],
+			[{ '1,0': 1, '1,1': 1 }, { '0,0': 1 }, { '1,0': 1, '1,1': -1 }],
+			[{ '0,0': 1 }, { '0,1': 1, '1,1': -1 }, { '0,1': 1, '1,1': 1 }],
+			[{ '1,1': 1 }, { '1,0': 1, '0,0': -1 }, { '0,0': 1, '1,0': 1 }],
+			[{ '0,0': 1, '0,1': 1 }, { '1,1': 1 }, { '0,0': -1, '0,1': 1 }],
+			[{ '1,0': 1, '0,0': -1 }, { '0,0': 1, '0,1': 1 }, { '1,1': 1 }],
+			[{ '0,1': 1, '1,1': -1 }, { '1,0': 1, '1,1': 1 }, { '0,0': 1 }]
+		];
 
 	for (let r = 0; r < 7; r++) {
 		const [aT, bT, cT] = products[r];
